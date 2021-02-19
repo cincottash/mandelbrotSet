@@ -1,0 +1,6 @@
+main()
+  File "C:\Users\cincottash\Documents\mandelbrotSet\main.py", line 7, in main
+    drawMandelbrotSet()
+  File "C:\Users\cincottash\Documents\mandelbrotSet\drawMandelbrotSet.py", line 35, in drawMandelbrotSet
+    if abs(z) > 2.0:
+TypeError: 'range_iterator' object is not callable

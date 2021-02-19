@@ -3,8 +3,8 @@ import numpy as np
 import random
 import math
 import time
-
-n = 24000
+import gc
+n = 32000
 totalPixels = n*n
 
 
@@ -20,12 +20,14 @@ def drawMandelbrotSet():
 	start = time.time()
 	for x in range(n):
 		v=0
+		#gc.collect()
 		for y in range(n):
 			#print(u, v)
+			
 			if(round(time.time() - start, 2) % 1 == 0):
 				percentDone = pixelsDone/n**2 * 100
 				print("Percent done: {}".format(round(percentDone, 2)))
-
+			
 			z = 0 + 0j
 			c = complex(xValuesList[x], yValuesList[y])
 			for i in range(100):
@@ -41,6 +43,7 @@ def drawMandelbrotSet():
 					bValue = normalZ * cosGradiant
 					
 					img[u][v] = (bValue, gValue, rValue)
+					#gc.collect()
 					break
 				#the middle portion
 				rValue = int(x*y/totalPixels * 255)
@@ -50,6 +53,7 @@ def drawMandelbrotSet():
 				img[u][v] = ((bValue, gValue, rValue))
 			
 			pixelsDone += 1
+
 			v+=1
 		u+=1
 	
