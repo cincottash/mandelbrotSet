@@ -11,8 +11,8 @@ def serializeMandelbrotSet(n):
 	img = np.zeros(shape=[n, n, 3], dtype=np.uint64)
 	
 	#Make n equally spaced values between -2 and 2
-	xValuesList = list(np.linspace(-2, 2, n))
-	yValuesList = list(np.linspace(-2, 2, n))
+	xValuesList = list(np.linspace(-1.5, .5, n))
+	yValuesList = list(np.linspace(-1, 1, n))
 
 	u=0
 	pixelsDone = 0
@@ -29,22 +29,25 @@ def serializeMandelbrotSet(n):
 			c = complex(xValuesList[x], yValuesList[y])
 			for i in range(100):
 				z = z*z + c
+				
 				if abs(z) > 2.0:
 					#normalizes z between 0 and 255
 					normalZ = int(-255*((abs(z)/4)-1.5))
-				
+					#print(normalZ)
 					cosGradiant = abs(math.cos(x * y))
-
+					
 					rValue = normalZ * cosGradiant * 0.85
 					gValue = normalZ * cosGradiant * 0.75
 					bValue = normalZ * cosGradiant
+					
+
 
 					img[u][v] = (bValue, gValue, rValue)
 					break
 				#the middle portion
-				rValue = int(x*y/totalPixels * 255)
-				gValue = int(x*y/totalPixels * 255/8)
-				bValue = int(x*y/totalPixels * 255)
+				rValue = int((x*y)/totalPixels * 255)
+				gValue = int((x*y)/totalPixels * 255/8)
+				bValue = int((x*y)/totalPixels * 255)
 
 				img[u][v] = ((bValue, gValue, rValue))
 			
