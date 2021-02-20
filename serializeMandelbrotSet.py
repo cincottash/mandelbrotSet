@@ -3,7 +3,7 @@ import numpy as np
 import math
 import time
 import pickle
-
+import sys
 def serializeMandelbrotSet(n):
 
 	totalPixels = n*n
@@ -59,3 +59,10 @@ def serializeMandelbrotSet(n):
 	#save numpy img before we write incase of crash while writing, so we can load the img and try again later
 	with open('{}cos.pickle'.format(str(n)), 'wb') as handle:
 		pickle.dump(img, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+def main():
+	n = int(sys.argv[1])
+
+	serializeMandelbrotSet(n)
+
+main()
