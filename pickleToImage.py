@@ -7,6 +7,7 @@ def main():
 	with open(fileName + '.pickle', 'rb') as handle:
 		img = pickle.load(handle)
 
+	print("Writing image to file")
 	cv2.imwrite(fileName + '.png', img) 
 
 main()
