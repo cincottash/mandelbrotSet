@@ -4,6 +4,9 @@ import math
 import time
 import pickle
 import sys
+
+maxIterations = 100
+
 def serializeMandelbrotSet(n):
 
 	totalPixels = n*n
@@ -27,7 +30,7 @@ def serializeMandelbrotSet(n):
 			
 			z = 0 + 0j
 			c = complex(xValuesList[x], yValuesList[y])
-			for i in range(100):
+			for i in range(maxIterations):
 				z = z*z + c
 				
 				if abs(z) > 2.0:
@@ -40,8 +43,6 @@ def serializeMandelbrotSet(n):
 					gValue = normalZ * cosGradiant * 0.75
 					bValue = normalZ * cosGradiant
 					
-
-
 					img[u][v] = (bValue, gValue, rValue)
 					break
 				#the middle portion
@@ -57,7 +58,7 @@ def serializeMandelbrotSet(n):
 		u+=1
 	
 	#save numpy img before we write incase of crash while writing, so we can load the img and try again later
-	with open('{}cos.pickle'.format(str(n)), 'wb') as handle:
+	with open('{}man.pickle'.format(str(n)), 'wb') as handle:
 		pickle.dump(img, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 def main():
