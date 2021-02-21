@@ -5,7 +5,7 @@ import time
 import pickle
 import sys
 
-maxIterations = 100
+maxIterations = 50
 
 def serializeJuliaSet(n):
 
@@ -14,8 +14,8 @@ def serializeJuliaSet(n):
 	img = np.zeros(shape=[n, n, 3], dtype=np.uint64)
 	
 	#Make n equally spaced values between -2 and 2
-	xValuesList = list(np.linspace(-.75, .75, n))
-	yValuesList = list(np.linspace(-.75, .75, n))
+	xValuesList = list(np.linspace(-1, 1, n))
+	yValuesList = list(np.linspace(-1, 1, n))
 
 	u=0
 	pixelsDone = 0
@@ -35,17 +35,18 @@ def serializeJuliaSet(n):
 				z = z*z + c
 				
 				if abs(z) > 10.0:
+					cosGradiant = abs(math.cos(x * y))
 					#zs seems to not go above 100
 					normalZ = abs(z)/100 * 255
 					#print(normalZ)
-					rValue = normalZ
-					gValue = normalZ/8
-					bValue = normalZ
+					rValue = normalZ * .1529
+					gValue = normalZ * .0823
+					bValue = normalZ * .5784
 					
 					img[u][v] = (bValue, gValue, rValue)
 					break
 				#the middle portion
-				rValue = int((x*y)/totalPixels * 255/4)
+				rValue = int((x*y)/totalPixels * 255)
 				gValue = int((x*y)/totalPixels * 255/8)
 				bValue = int((x*y)/totalPixels * 255)
 
