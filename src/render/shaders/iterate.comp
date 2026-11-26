@@ -19,8 +19,11 @@ layout(std430, binding = 4) buffer Stats {
 } stats;
 // A pixel that needs more iterations than one dispatch may run saves where it is here and goes on in the next
 // dispatch, so no single dispatch runs long enough for the graphics driver to reset (Windows allows about 2 s).
-// Five vec4 per pixel of the tile.
+// Five vec4 per pixel, in the tile's own slot (several tiles run together).
 layout(std430, binding = 5) buffer State { vec4 st[]; };
+// Inside-the-set boxing: 1 for each block whose whole border is inside the set. The set of points that haven't
+// escaped after N iterations has no holes (an escape lemniscate), so everything the border encloses is inside too.
+layout(std430, binding = 6) readonly buffer Blocks { uint blockInside[]; };
 
 uniform ivec2 uOrigin;
 uniform ivec2 uTileSize;
@@ -47,6 +50,25 @@ uniform bool uStripe;
 uniform float uStripeDensity;
 uniform int uIterBudget;      // iterations a pixel may run in this dispatch
 uniform bool uResume;         // go on from the saved state (a later dispatch of the same tile)
+uniform int uStateBase;       // the tile's first pixel slot in the state buffer
+uniform int uPixelSet;        // 0 every pixel; boxing: 1, 2, 3 (see main)
+uniform int uBlockBase;       // the tile's first entry in blockInside (4 big blocks, then 64 small ones)
+uniform bool uShallowCheck;   // shallow Mandelbrot views: the main cardioid and the period-2 disk are inside outright
+uniform vec2 uRefC;           // the reference point, for that check
+
+const int BLOCK1 = 64, BLOCK2 = 16;
+
+bool onBlockBorder(ivec2 local, int size)
+{
+    ivec2 lo = (local / size) * size;
+    ivec2 hi = min(min(lo + size, uTileSize), uSize - uOrigin) - 1;
+    return local.x == lo.x || local.y == lo.y || local.x == hi.x || local.y == hi.y;
+}
+bool blockFlag(ivec2 local, int size, int first)
+{
+    ivec2 b = local / size;
+    return blockInside[uBlockBase + first + b.y * ((uTileSize.x + size - 1) / size) + b.x] != 0u;
+}
 
 const int ZERO_E = -1000000000;
 const float BIG = 1.0e30;
@@ -147,6 +169,20 @@ void main()
     ivec2 p = uOrigin + local;
     bool inTile = local.x < uTileSize.x && local.y < uTileSize.y && p.x < uSize.x && p.y < uSize.y;
 
+    // Boxing in two sizes: 1) the borders of 64-pixel blocks; 2) the borders of 16-pixel blocks inside the big blocks
+    // that weren't all inside; 3) the rest, filled where an enclosing block's border was all inside.
+    bool boxedInside = false;
+    if (inTile && uPixelSet != 0) {
+        const bool on1 = onBlockBorder(local, BLOCK1), on2 = onBlockBorder(local, BLOCK2);
+        const bool in1 = !on1 && uPixelSet >= 2 && blockFlag(local, BLOCK1, 0);
+        if (uPixelSet == 1) inTile = on1;
+        else if (uPixelSet == 2) inTile = !on1 && on2 && !in1;
+        else {
+            inTile = !on1 && (!on2 || in1);
+            boxedInside = in1 || (!on2 && blockFlag(local, BLOCK2, 4));
+        }
+    }
+
     int n = 0;
     bool glitch = false;
     bool inside = true;
@@ -160,7 +196,7 @@ void main()
     int stripeCount = 0;
     bool finished = true;   // false: the budget ran out first; the state is saved for the next dispatch
     bool skip = false;      // finished in an earlier dispatch of this tile: nothing to do
-    const int si = (local.y * uTileSize.x + local.x) * 5;
+    const int si = (uStateBase + local.y * uTileSize.x + local.x) * 5;
 
     if (inTile) {
         vec2 q =(vec2(p) + 0.5 + uJitter - 0.5 * vec2(uSize)) * uInvHalfH;
@@ -186,6 +222,12 @@ void main()
         vec2 dz = uJulia ? dc : vec2(0.0);
         vec2 c = uJulia ? vec2(0.0) : dc;
         z = refF[0].xy + dz;
+        if (uShallowCheck) {
+            // Inside the main cardioid or the period-2 disk: inside for sure, no iterations needed.
+            vec2 cc = uRefC + dc;
+            float x = cc.x - 0.25, q = x * x + cc.y * cc.y;
+            if (q * (q + x) < 0.25 * cc.y * cc.y || (cc.x + 1.0) * (cc.x + 1.0) + cc.y * cc.y < 0.0625) boxedInside = true;
+        }
 #endif
         r2 = dot(z, z);
 
@@ -214,6 +256,7 @@ void main()
             dz = s0.xy;
 #endif
         }
+        if (boxedInside && !skip) n = uMaxIter;   // enclosed by inside pixels: inside, without iterating
         const int nStop = skip ? n : min(uMaxIter, n + uIterBudget);
 
         while (n < nStop) {

@@ -1,0 +1,44 @@
+// Inside-the-set boxing: for each block of a tile, whether every pixel on its border is inside the set. The pixels
+// a border encloses are then inside too (the set of points that haven't escaped after N iterations is a filled
+// region without holes), and the iteration shader fills them without iterating.
+// Level 1: the 4 big blocks (64 pixels), stored first; level 2: the 64 small blocks (16 pixels), stored after.
+// "#version 430 core" is prepended by the program.
+
+layout(local_size_x = 64) in;
+
+layout(rgba32f, binding = 0) uniform readonly image2D uRaw0;   // mu (-1 inside)
+layout(std430, binding = 6) buffer Blocks { uint blockInside[]; };
+
+uniform ivec2 uOrigin;
+uniform ivec2 uTileSize;
+uniform ivec2 uSize;
+uniform int uLevel;           // 1 or 2
+uniform int uBlockBase;
+
+bool isInside(ivec2 local) { return imageLoad(uRaw0, uOrigin + local).x < 0.0; }
+
+void main()
+{
+    const int size = uLevel == 1 ? 64 : 16;
+    const int first = uLevel == 1 ? 0 : 4;
+    const int bx = (uTileSize.x + size - 1) / size, by = (uTileSize.y + size - 1) / size;
+    const int i = int(gl_GlobalInvocationID.x);
+    if (i >= bx * by) return;
+    const ivec2 b = ivec2(i % bx, i / bx);
+    const ivec2 lo = b * size;
+    const ivec2 hi = min(min(lo + size, uTileSize), uSize - uOrigin) - 1;
+    if (uLevel == 2) {
+        // Inside a big block that is filled already: its small blocks were never computed.
+        const ivec2 big = lo / 64;
+        if (blockInside[uBlockBase + big.y * ((uTileSize.x + 63) / 64) + big.x] != 0u) {
+            blockInside[uBlockBase + first + i] = 1u;
+            return;
+        }
+    }
+    uint all = (hi.x - lo.x >= 2 && hi.y - lo.y >= 2) ? 1u : 0u;   // a block without inside pixels needs nothing
+    for (int x = lo.x; x <= hi.x && all == 1u; ++x)
+        if (!isInside(ivec2(x, lo.y)) || !isInside(ivec2(x, hi.y))) all = 0u;
+    for (int y = lo.y + 1; y < hi.y && all == 1u; ++y)
+        if (!isInside(ivec2(lo.x, y)) || !isInside(ivec2(hi.x, y))) all = 0u;
+    blockInside[uBlockBase + first + i] = all;
+}

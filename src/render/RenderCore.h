@@ -78,6 +78,7 @@ public:
     void planePoint(const core::View& v, int w, int h, double px, double py, core::BigFloat* x, core::BigFloat* y) const;
     // Testing: turn the iteration skipping off or on, and force a reference point.
     void setUseBla(bool on) { m_useBla = on; m_dirty = true; }
+    void setBoxing(bool on) { m_boxing = on; m_dirty = true; }
     bool useBla() const { return m_useBla; }
     int autoIterations() const { return m_autoIter; }
     // Testing: renderImage() keeps the raw numbers of its last piece here when this is on.
@@ -121,6 +122,7 @@ private:
     int m_w = 800, m_h = 600, m_ss = 1;
     double m_time = 0;
     bool m_useBla = true;
+    bool m_boxing = true;
     bool m_dirty = true;            // the view or formula changed since the last pass started
     bool m_colorsDirty = true;
     QString m_paletteName;
