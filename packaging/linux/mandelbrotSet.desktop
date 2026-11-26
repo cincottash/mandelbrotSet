@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mandelbrot Set
+Comment=Explore the Mandelbrot and Julia sets, zooming as deep as you like
+Exec=mandelbrotSet %f
+Icon=mandelbrotSet
+Categories=Graphics;Education;
+Terminal=false

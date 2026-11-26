@@ -12,7 +12,7 @@ View View::home(bool julia)
     View v;
     v.cx = BigFloat(julia ? 0.0 : -0.6, 128);
     v.cy = BigFloat(0.0, 128);
-    v.scale = FloatExp(julia ? 1.35 : kHomeScale);
+    v.scale = FloatExp(kHomeScale);   // the same for both, so "Zoom 1×" means fully zoomed out
     v.angle = 0.0;
     return v;
 }

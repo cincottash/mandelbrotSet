@@ -1,0 +1,201 @@
+// The main window: option cards on the left, the picture on the right, menus, a header and a bottom bar.
+#pragma once
+
+#include "Settings.h"
+
+#include "core/ColorParams.h"
+#include "core/Fractal.h"
+#include "core/Location.h"
+
+#include <QHash>
+#include <QList>
+
+#include <functional>
+#include <QMainWindow>
+#include <QPointer>
+#include <QTimer>
+
+class FractalView;
+class SliderRow;
+class ColorButton;
+class SeedPad;
+class QAction;
+class QActionGroup;
+class QCheckBox;
+class QComboBox;
+class QFrame;
+class QGridLayout;
+class QLabel;
+class QLineEdit;
+class QListWidget;
+class QPlainTextEdit;
+class QPushButton;
+class QSpinBox;
+class QToolButton;
+class QVBoxLayout;
+class QMenu;
+
+class MainWindow : public QMainWindow {
+    Q_OBJECT
+public:
+    // interactive = false: screenshot and test mode (no dialogs of its own on errors, nothing saved).
+    explicit MainWindow(Settings& s, bool interactive = true, QWidget* parent = nullptr);
+    ~MainWindow() override;
+
+    FractalView* view() const { return m_view; }
+    void openLocationFile(const QString& path);
+    void applyLocation(const core::Location& l, bool remember = true);
+    core::Location currentLocation() const;
+    const core::FractalParams& fractal() const { return m_fractal; }
+    const core::ColorParams& colors() const { return m_colors; }
+    void setColors(const core::ColorParams& c);   // as if the controls were moved
+    void trigger(const QString& menuText);         // runs a menu command by its text
+    QString logText() const;
+    QStringList placeNames() const;
+    int historySize() const { return int(m_history.size()); }
+    int historyPos() const { return m_historyPos; }
+    void setCardOpen(const QString& name, bool open, bool save = true);
+    bool cardOpen(const QString& name) const;
+    SliderRow* sliderRow(const QString& key) const { return m_rows.value(key); }
+    QString statusText() const;
+    void refreshStatus() { updateStatus(); }   // the header and status line, now (screenshots and tests)
+    // What the dialogs do once answered (tests call these directly; they never open a window).
+    bool savePictureTo(const QString& path, int w, int h, int samplesPerSide, QString* error,
+                       const std::function<bool(double)>& progress = {});
+    void addPlaceNamed(const QString& name);
+    void renamePlaceTo(int row, const QString& name);
+    void selectPlace(int row);
+    bool placeButtonsEnabled(bool* go, bool* rename, bool* remove) const;
+
+protected:
+    void closeEvent(QCloseEvent* e) override;
+    bool eventFilter(QObject* watched, QEvent* e) override;
+
+private:
+    struct Card { QFrame* frame; QWidget* body; QToolButton* toggle; };
+
+    void buildMenus();
+    void buildUi();
+    QFrame* makeCard(const QString& title, QVBoxLayout** body);
+    QToolButton* linkButton(const QString& text);
+    void updateStretch();
+    QWidget* buildFractalCard();
+    QWidget* buildColorCard();
+    QGridLayout* sliderGrid(const char* card, QVBoxLayout* into);
+    void buildPlaces(QVBoxLayout* body);
+
+    void syncControls();
+    void updateStyleVisibility();
+    void fractalEdited();
+    void colorsEdited();
+    void updateStatus();
+    void log(const QString& text);
+
+    void applyTheme();
+    void previewTheme(const QString& key);
+    void endThemePreview();
+    QAction* addThemeAction(QMenu* menu, const QString& text, const QString& key);
+    void applyOpacity();
+    bool followsOpacity(const QWidget* w) const;
+    void saveSettingsSoon();
+    void saveSettingsNow();
+
+    void savePicture();
+    void saveLocation();
+    void openLocation();
+    void copyLocation();
+    void pasteLocation();
+    void rememberView();
+    void back();
+    void forward();
+    void resetView();
+    void randomizeColors();
+    void showViewMenu(const QPoint& global, const QString& re, const QString& im);
+    void switchToJulia(const QString& re, const QString& im);
+    void switchToMandelbrot();
+
+    void loadPlaces();
+    void savePlaces();
+    void refreshPlaces();
+    void addPlace();
+    void renamePlace();
+    void removePlace();
+    void goToPlace(int row);
+    void updatePlaceButtons();
+    void renderBuiltInThumbnails();
+
+    Settings& m_s;
+    bool m_interactive;
+    core::FractalParams m_fractal;
+    core::ColorParams m_colors;
+    core::View m_lastMandelbrotView;
+    bool m_syncing = false;
+
+    FractalView* m_view = nullptr;
+    QLabel* m_title = nullptr;
+    QLabel* m_pill = nullptr;
+    QToolButton* m_notKept = nullptr;
+    QLabel* m_status = nullptr;
+    QLabel* m_gpuMessage = nullptr;
+    QVBoxLayout* m_leftCol = nullptr;
+    QHash<QString, Card> m_cards;
+    QHash<QString, SliderRow*> m_rows;
+
+    // FRACTAL
+    QComboBox* m_type = nullptr;
+    SliderRow* m_power = nullptr;
+    SliderRow* m_escape = nullptr;
+    QCheckBox* m_autoIter = nullptr;
+    QSpinBox* m_iter = nullptr;
+    QWidget* m_seedBox = nullptr;
+    SeedPad* m_seedPad = nullptr;
+    QLineEdit* m_seedRe = nullptr;
+    QLineEdit* m_seedIm = nullptr;
+    QLabel* m_juliaHint = nullptr;
+    // COLOR
+    QComboBox* m_look = nullptr;
+    QComboBox* m_style = nullptr;
+    QComboBox* m_palette = nullptr;
+    QComboBox* m_scale = nullptr;
+    QLabel* m_paletteLabel = nullptr;
+    QLabel* m_scaleLabel = nullptr;
+    ColorButton* m_moireTint = nullptr;
+    QLabel* m_moireTintLabel = nullptr;
+    ColorButton* m_edgeColor = nullptr;
+    QComboBox* m_interior = nullptr;
+    ColorButton* m_in1 = nullptr;
+    ColorButton* m_in2 = nullptr;
+    QLabel* m_in2Label = nullptr;
+    // PLACES
+    QListWidget* m_places = nullptr;
+    QPushButton* m_goPlace = nullptr;
+    QPushButton* m_renamePlace = nullptr;
+    QPushButton* m_removePlace = nullptr;
+    QList<core::Location> m_placeList;   // built-in first, then the user's
+    // ACTIVITY
+    QPlainTextEdit* m_log = nullptr;
+    // Bottom bar
+    QPushButton* m_backBtn = nullptr;
+    QPushButton* m_forwardBtn = nullptr;
+
+    // Menus
+    QMenu* m_viewMenu = nullptr;
+    QActionGroup* m_themeGroup = nullptr;
+    QString m_themePreviewing;
+    QTimer m_themePreviewTimer;
+    QAction* m_juliaPreviewAct = nullptr;
+    QAction* m_onTopAct = nullptr;
+    QActionGroup* m_aaGroup = nullptr;
+    QAction* m_backAct = nullptr;
+    QAction* m_forwardAct = nullptr;
+    QHash<int, bool> m_effectsDefault;
+
+    // History of views (Back and Forward)
+    QList<core::Location> m_history;
+    int m_historyPos = -1;
+
+    QTimer m_saveTimer;
+    QTimer m_statusTimer;
+    QString m_lastGpuLine;
+    bool m_thumbsPending = true;
+};

@@ -52,12 +52,16 @@ float bandValue(float mu)
     return s * uDensity + uOffset;
 }
 
+// The pixel counted the way the original Python renders count it: from the left and from the bottom.
+ivec2 fromBottomLeft(ivec2 px) { return ivec2(px.x, uOutSize.y - 1 - px.y); }
+
 // The original Python version's exterior: brightness from where |z| first passed 2, times |cos(x * y)| of the
 // pixel's own row and column. At this size cos(x * y) changes faster than the pixels, which draws the folds.
 vec3 moire(float firstR, ivec2 px)
 {
     float v = clamp(1.5 - firstR / 4.0, 0.0, 1.0);
-    double arg = double(uMoireScale) * double(px.x) * double(px.y);
+    ivec2 q = fromBottomLeft(px);
+    double arg = double(uMoireScale) * double(q.x) * double(q.y);
     const double TAU_D = 6.283185307179586476925LF;
     float r = float(arg - floor(arg / TAU_D) * TAU_D);
     return v * abs(cos(r)) * uMoireTint;
@@ -82,7 +86,8 @@ vec3 sampleColor(ivec2 rawPx, ivec2 outPx)
     vec3 col;
     if (inside) {
         if (uInterior == 1) {
-            float t = (float(outPx.x) * float(outPx.y)) / (float(uOutSize.x) * float(uOutSize.y));
+            ivec2 q = fromBottomLeft(outPx);
+            float t = (float(q.x) * float(q.y)) / (float(uOutSize.x) * float(uOutSize.y));
             col = mix(uIn1, uIn2, clamp(t, 0.0, 1.0));
         } else if (uInterior == 2) {
             float t = clamp(sqrt(r1.w) / 2.0, 0.0, 1.0);

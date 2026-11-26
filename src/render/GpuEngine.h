@@ -20,6 +20,21 @@ struct PassStats {
     quint32 maxN = 0, maxIdx = 0, glitches = 0, nearMax = 0, escaped = 0, maxEscN = 0, inside = 0, pad = 0;
 };
 
+struct PassParams {
+    core::View view;
+    core::ComplexExp offset;      // view center - reference point
+    int outW = 0, outH = 0;
+    int ss = 1;
+    int maxIterations = 1000;
+    double escapeRadius = 256;
+    bool julia = false;
+    int power = 2;
+    bool stripes = false;
+    double stripeDensity = 5;
+    bool wideRange = false;       // the extended-range shader (deep zooms)
+    bool useBla = true;
+};
+
 // One render's raw numbers (two float textures) and what it was rendered for.
 struct RawFrame {
     unsigned tex0 = 0, tex1 = 0;
@@ -28,6 +43,7 @@ struct RawFrame {
     int outW = 0, outH = 0;
     int ss = 1;
     core::View view;
+    PassParams pass;              // everything it was computed with
     bool complete = false;
     PassStats stats;
     double gpuMs = 0;             // time spent computing it
@@ -42,21 +58,6 @@ struct ColorTarget {
     int w = 0, h = 0;
     core::View view;              // the view the picture shows
     bool valid = false;
-};
-
-struct PassParams {
-    core::View view;
-    core::ComplexExp offset;      // view center - reference point
-    int outW = 0, outH = 0;
-    int ss = 1;
-    int maxIterations = 1000;
-    double escapeRadius = 256;
-    bool julia = false;
-    int power = 2;
-    bool stripes = false;
-    double stripeDensity = 5;
-    bool wideRange = false;       // the extended-range shader (deep zooms)
-    bool useBla = true;
 };
 
 class GpuEngine : protected QOpenGLFunctions_4_3_Core {

@@ -220,6 +220,7 @@ void GpuEngine::startPass(RawFrame& frame, const PassParams& p)
 {
     m_pass = p;
     frame.view = p.view;
+    frame.pass = p;
     frame.ss = std::max(1, p.ss);
     frame.outW = std::max(1, p.outW);
     frame.outH = std::max(1, p.outH);

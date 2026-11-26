@@ -267,7 +267,10 @@ void RenderCore::afterFullPass(const RawFrame& f)
     const int maxIt = f.maxIterations;
     if (m_fractal.autoIterations) {
         // Many pixels escaping late: the limit cuts off detail, so raise it and render again.
-        if (s.escaped > 0 && double(s.nearMax) > 0.002 * double(s.escaped + s.inside) && maxIt < core::FractalParams::kMaxIterations) {
+        // "Many" = over 1 % of the escaping pixels escape in the limit's top half (a zoomed-out view has a thin
+        // boundary of slow pixels that never needs more).
+        if (s.escaped > 0 && double(s.nearMax) > 0.01 * double(s.escaped)
+            && double(s.nearMax) > 0.0005 * double(pixels) && maxIt < core::FractalParams::kMaxIterations) {
             m_autoIter = std::min(maxIt * 2, core::FractalParams::kMaxIterations);
             m_autoIterScaleLog2 = f.view.scale.log2Abs();
             m_dirty = true;
@@ -327,8 +330,7 @@ bool RenderCore::step(double budgetMs, bool moving)
     const RawFrame* front = m_front >= 0 ? &m_frames[m_front] : nullptr;
     const bool frontCurrent = front && front->complete && front->refId == m_ref.id && front->maxIterations == maxIt
         && front->outW == std::max(1, m_w / front->divisor) && front->outH == std::max(1, m_h / front->divisor)
-        && samePassContent(passParams(m_view, front->outW, front->outH, 1, maxIt),
-                           passParams(front->view, front->outW, front->outH, 1, front->maxIterations));
+        && samePassContent(passParams(m_view, front->outW, front->outH, 1, maxIt), front->pass);
     const int frontDiv = frontCurrent ? front->divisor : 0;
     int wantDiv = 0, wantSS = 0;
     if (moving) {
@@ -432,17 +434,17 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
 
     // A reference that fits this view, computed here and now.
     capturedReferences = 0;
-    auto syncReference = [&](const core::BigFloat* atX, const core::BigFloat* atY) {
-        ++capturedReferences;
+    auto syncReference = [&](const core::BigFloat* atX, const core::BigFloat* atY, bool tableOnly = false) {
+        if (!tableOnly) ++capturedReferences;
         stopWorker();
-        requestReference(v, maxIt, w, h, false, atX, atY);
+        requestReference(v, maxIt, w, h, tableOnly && m_ref.orbit, atX, atY);
         if (m_thread.joinable()) m_thread.join();
         m_jobDone = true;
         return collectWorker();
     };
     bool tableOnly = false;
     if (referenceWanted(v, maxIt, w, h, &tableOnly) || !referenceUsable(v, maxIt)) {
-        if (!syncReference(nullptr, nullptr)) {
+        if (!syncReference(nullptr, nullptr, tableOnly && referenceUsable(v, maxIt))) {
             if (error) *error = QStringLiteral("The reference orbit couldn't be computed.");
             return {};
         }
