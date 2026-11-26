@@ -159,6 +159,7 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
     for (const QString& c : m_cards.keys()) setCardOpen(c, !m_s.foldedCards.contains(c), false);
     updateStyleVisibility();
 
+    setMinimumSize(1000, 640);   // every button and the cards' columns fit from here up
     if (!m_s.geometry.isEmpty()) restoreGeometry(m_s.geometry);
     else if (QScreen* sc = QGuiApplication::primaryScreen()) {
         const QRect a = sc->availableGeometry();

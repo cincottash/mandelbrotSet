@@ -1,0 +1,182 @@
+# Mandelbrot Set
+
+Explore the Mandelbrot and Julia sets on your graphics card, zooming as deep as you like: past 10⁻³⁰⁰,
+10⁻¹⁰⁰⁰ and beyond, in real time. Color them dozens of ways, let the autopilot dive forever, and record zoom
+movies, including seamless loops that repeat endlessly.
+
+![The main window](docs/window.png)
+
+## Download
+
+Get `mandelbrotSet.exe` (Windows) from the [Releases](https://github.com/cincottash/mandelbrotSet/releases) page.
+It is one file: nothing to install. It needs a graphics card with OpenGL 4.3 (any card from about 2012 on).
+A Linux AppImage is built too and is **experimental**: it hasn't been run on a real Linux desktop yet, and MP4
+movies are Windows only there (WebP and PNG frames work).
+
+## First run
+
+The app asks where to keep its settings (theme, colors, saved places, the last view). The suggested folder is
+fine. Then scroll to zoom.
+
+## Exploring
+
+| | |
+|---|---|
+| **Scroll** | zoom in or out at the pointer, smoothly |
+| **Drag** | move |
+| **Right-drag** | turn |
+| **Double-click** | zoom in 4× |
+| **Right-click** | zoom or center here, the Julia set of this point, copy the point |
+| **J** | a live preview of the Julia set under the pointer |
+| **P** | autopilot |
+
+The status line shows the center, the zoom, the iteration limit and how long the picture took. Back and Forward
+step through the views you visited. **Places** holds famous spots to start from and the ones you save.
+
+## Colors
+
+Ten ready-made **Looks**, and every setting behind them as a slider: the style (smooth gradient, sine waves,
+distance bands, stripes, angle, and the original Python renders' **moiré fabric**), 20 palettes, density, offset,
+color cycling, lighting (angle, height, relief, shine), glowing edges, the inside's color or gradient, and effects
+(hue, saturation, brightness, contrast, gamma, vignette, film grain). Right-click any slider to put it back.
+Colors change instantly: only the fractal's shape takes rendering.
+
+![Every look at the same place](docs/looks.png)
+
+## Autopilot
+
+**Autopilot ▶** zooms in on its own, forever, steering toward the richest detail near the middle and backing out
+of empty views. Drag to steer it; Escape stops it.
+
+![Twelve moments of one autopilot flight](docs/autopilot.png)
+
+## Zoom movies and seamless loops
+
+<img align="right" width="380" src="docs/record.png">
+
+**Record Zoom…** renders a dive from the whole set into the current view as an MP4 video, an animated WebP, or
+PNG frames, at any size up to 4K (8K and more as frames). **Seamless Loop** finds a mini Mandelbrot inside the
+view and zooms along the exact path into it. The mini copy looks like the whole set, the colors are matched at
+both ends and the wrap is blended, so the movie repeats forever.
+
+<br clear="right">
+
+![A seamless loop: the last frame leads back into the first](docs/loop.png)
+
+## Pictures
+
+**Save Picture…** saves any size up to 32768 × 32768 pixels with up to 4 × 4 anti-aliasing. Large pictures are
+drawn in pieces, so memory is never the limit.
+
+<details>
+<summary><b>Menus</b></summary>
+
+- **File:** Open Location…, Save Location…, Save Picture…, Copy Location, Paste Location, Settings (Change App
+  Data Folder…, Reset Settings to Defaults…), Quit
+- **Explore:** Back, Forward, Reset View, Zoom In, Zoom Out, Turn Left, Turn Right, Straighten, Add to Places…,
+  Randomize Colors, Autopilot, Autopilot Speed, Record Zoom…
+- **View:** Theme, Window Opacity, Julia Preview, Anti-Aliasing, Zoom Speed, Always on Top, Full Screen, Reset View
+  Options
+- **Help:** Mouse and Keys, Project Website, Open App Data Folder, Report a Problem, About
+
+</details>
+
+<details>
+<summary><b>Command line</b></summary>
+
+```
+mandelbrotSet.exe [location.json]                       open a location
+mandelbrotSet.exe --render location.json --out picture.png [--size 3840x2160] [--anti-aliasing 2]
+mandelbrotSet.exe --record location.json --out zoom.mp4 [--size 1920x1080] [--seconds 20] [--fps 30]
+                  [--anti-aliasing 2] [--loop]          a zoom movie (.mp4, .webp, or a folder for PNG frames)
+mandelbrotSet.exe --screenshot window.png               a picture of the window (no dialogs; for checks)
+mandelbrotSet.exe --data-folder FOLDER                  keep settings in FOLDER for this run
+```
+
+Exit codes: 0 done, 2 bad arguments or file, 3 no OpenGL 4.3, 4 rendering failed, 5 couldn't save.
+
+</details>
+
+<details>
+<summary><b>Location files</b></summary>
+
+Plain JSON, readable on any computer (numbers are written as text, never in the system's number format):
+
+```json
+{
+  "format": "mandelbrotSet location",
+  "version": 1,
+  "view": { "re": "-0.7436438870371587047521915", "im": "0.1318259042053119704931320",
+            "scale": "3e-30", "angle_degrees": 0 },
+  "fractal": { "type": "mandelbrot", "power": 2, "auto_iterations": true, "escape_radius": 256 },
+  "colors": { "style": 0, "palette": "Seahorse", "density": 1.0 }
+}
+```
+
+`scale` is half the view's height in the plane. The center keeps every digit the zoom needs. Missing color
+settings keep their defaults.
+
+</details>
+
+<details>
+<summary><b>How the deep zoom works</b></summary>
+
+- One **reference point** is iterated with arbitrary precision (MPFR) on the processor.
+- Every pixel is computed on the graphics card as a small offset from it (**perturbation**), in fast
+  single-precision math, with each reference value stored as two floats so nothing is lost where pixels pass
+  close to zero. Pixels **rebase** onto the reference's start when they get closer to zero than to the reference,
+  which keeps them exact even after the reference escapes.
+- A **bilinear approximation** table lets pixels skip thousands of iterations at once while their offset is small.
+- Past about 10⁻²⁴ an **extended-range** shader keeps a power-of-two exponent beside each small number, and
+  drops back to plain floats whenever a pixel's offset is large enough.
+- The raw results (escape time, distance, surface direction, angle, stripes) are colored in a separate pass, so
+  color changes never recompute the fractal.
+- While the view moves, the last picture follows every movement at once and quick low-resolution previews
+  replace it; when the view rests the full picture and then anti-aliasing follow.
+- The local tests compare the graphics card's pixels with brute-force arbitrary-precision iteration at zooms
+  from 1 to 10⁻¹⁵⁰⁰.
+
+</details>
+
+<details>
+<summary><b>Building from source</b></summary>
+
+Windows, with [MSYS2](https://www.msys2.org) (UCRT64):
+
+```
+pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,qt6-static,qt6-base,qt6-svg,mpfr,gmp,libwebp}
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+For the single self-contained exe add `-DSTATIC_BUILD=ON -DCMAKE_PREFIX_PATH=/ucrt64/qt6-static`.
+Linux: Qt 6.5 or newer, `libmpfr-dev`, `libgmp-dev`, `libwebp-dev`, then the same two cmake lines.
+
+Every merge into the default branch publishes a release with the next version number (see
+`.github/workflows/build-apps.yml`).
+
+</details>
+
+<details>
+<summary><b>Code layout</b></summary>
+
+- `src/core`: numbers with unlimited range and precision, the view, the reference orbit and its skip table,
+  minibrot finding and zoom paths, palettes and color settings, location files (no window code).
+- `src/render`: the OpenGL 4.3 engine (`shaders/iterate.comp` computes, `colorize.frag` colors,
+  `display.frag` draws) and `RenderCore`, which decides what to render and when.
+- `src/app`: the window, the picture widget with its mouse handling and autopilot, the Record Zoom dialog and the
+  movie writers.
+- `legacy/`: the original Python scripts and one of their 2000 × 2000 renders.
+
+</details>
+
+## License and credits
+
+Copyright (C) 2026 cincottash. Licensed under the [GNU GPL, version 3](LICENSE).
+
+Built with [Qt](https://www.qt.io), [MPFR](https://www.mpfr.org) and [GMP](https://gmplib.org), and
+[libwebp](https://chromium.googlesource.com/webm/libwebp). The deep zoom methods (perturbation, rebasing and
+bilinear approximation) follow the work shared by Zhuoran, Claude Heiland-Allen and the fractalforums.org
+community. The editor themes are adjusted from their original schemes (Nord, Dracula, Solarized, Gruvbox, One
+Dark and Light, Tokyo Night, Catppuccin, Rosé Pine, Everforest, Kanagawa, Ayu, Palenight, Night Owl, Cobalt2,
+Synthwave '84, Tomorrow, Monokai, Zenburn).
