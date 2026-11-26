@@ -1,0 +1,28 @@
+# Build output (builds normally go outside the repo)
+build/
+build-*/
+out/
+dist/
+CMakeUserPresets.json
+CMakeLists.txt.user*
+compile_commands.json
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local-only tests, check scripts and notes (kept out of the repo)
+tests/
+tools/
+scratch/
+HANDOFF.md
+
+# Secrets / local config
+.env
+config.local.*
+
+# The old Python version's compiled files and its 96 MB raw data dump
+__pycache__/
+*.pyc
+legacy/*.pickle
