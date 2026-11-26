@@ -73,13 +73,15 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     m_size = new QComboBox;
     const QSize win(windowSize.width() & ~1, windowSize.height() & ~1);
     m_size->addItem(QStringLiteral("Window Size (%1 × %2)").arg(win.width()).arg(win.height()), win);
+    m_size->addItem(QStringLiteral("Small (640 × 360)"), QSize(640, 360));
+    m_size->addItem(QStringLiteral("Medium (960 × 540)"), QSize(960, 540));
     m_size->addItem(QStringLiteral("720p (1280 × 720)"), QSize(1280, 720));
     m_size->addItem(QStringLiteral("1080p (1920 × 1080)"), QSize(1920, 1080));
     m_size->addItem(QStringLiteral("1440p (2560 × 1440)"), QSize(2560, 1440));
     m_size->addItem(QStringLiteral("4K (3840 × 2160)"), QSize(3840, 2160));
     m_size->addItem(QStringLiteral("Square (1080 × 1080)"), QSize(1080, 1080));
     m_size->addItem(QStringLiteral("Custom"), QSize());
-    m_size->setCurrentIndex(2);
+    m_size->setCurrentIndex(m_size->findData(QSize(1920, 1080)));
     form->addRow(QStringLiteral("Size"), m_size);
     auto* wh = new QHBoxLayout;
     m_w = new QSpinBox;
@@ -101,6 +103,7 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
                                     "times the work."));
     form->addRow(QStringLiteral("Anti-Aliasing"), m_aa);
     m_format = new QComboBox;
+    m_format->setProperty("testId", QStringLiteral("format"));
     for (int i = 0; i < MovieWriter::formatNames().size(); ++i) {
         m_format->addItem(MovieWriter::formatNames()[i]);
         QString why;
@@ -110,6 +113,7 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
         }
     }
     m_format->setToolTip(QStringLiteral("MP4 plays everywhere; animated WebP loops by itself in browsers and chats; "
+                                        "animated GIF loops anywhere, with 256 colors a frame; "
                                         "PNG Frames saves every frame as a picture in a folder."));
     form->addRow(QStringLiteral("Format"), m_format);
     lay->addLayout(form);
@@ -141,7 +145,13 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     connect(m_seconds, &QDoubleSpinBox::valueChanged, this, &RecordDialog::updateInfo);
     connect(m_fps, &QComboBox::currentIndexChanged, this, &RecordDialog::updateInfo);
     connect(m_aa, &QComboBox::currentIndexChanged, this, &RecordDialog::updateInfo);
-    connect(m_format, &QComboBox::currentIndexChanged, this, &RecordDialog::updateInfo);
+    connect(m_format, &QComboBox::currentIndexChanged, this, [this] {
+        // GIF files grow very large: picking GIF moves a big size down to Medium (it can be raised again).
+        if (MovieWriter::Format(m_format->currentIndex()) == MovieWriter::Format::Gif
+            && m_w->value() * m_h->value() > 960 * 540)
+            m_size->setCurrentIndex(m_size->findData(QSize(960, 540)));
+        updateInfo();
+    });
     connect(m_loop, &QRadioButton::toggled, this, [this](bool on) {
         if (on && !m_minibrot.found && !m_searching) startSearch();
         updateInfo();
@@ -200,6 +210,10 @@ void RecordDialog::updateInfo()
         parts << QStringLiteral("animated WebP files grow large above 720p");
     if (s.format == MovieWriter::Format::Mp4 && (s.size.width() > 4096 || s.size.height() > 2304))
         parts << QStringLiteral("MP4 works up to 4096 × 2304");
+    if (s.format == MovieWriter::Format::Gif) {
+        if (s.size.width() * s.size.height() > 960 * 540) parts << QStringLiteral("GIF files grow very large above 960 × 540");
+        if (s.fps > 50) parts << QStringLiteral("GIF plays at most 50 frames a second, so it keeps every other frame (%1 a second)").arg(s.fps / 2);
+    }
     m_info->setText(parts.join(QStringLiteral(" · ")) + QStringLiteral("."));
     const bool mp4TooBig = s.format == MovieWriter::Format::Mp4 && (s.size.width() > 4096 || s.size.height() > 2304);
     m_ok->setEnabled(loopReady && !m_searching && !mp4TooBig);
@@ -223,7 +237,7 @@ RecordSettings RecordDialog::settings() const
         s.from = core::View::home(false);
         s.to = core::minibrotHome(m_minibrot);
     } else {
-        s.from = core::View::home(false);
+        s.from = core::View::home(false);   // the caller puts the formula's own home here
         s.to = m_current;
     }
     return s;

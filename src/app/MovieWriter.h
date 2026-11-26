@@ -1,5 +1,5 @@
-// Writes the frames of a zoom movie: MP4 video (Windows' own H.264 encoder), animated WebP, or numbered PNG
-// pictures in a folder.
+// Writes the frames of a zoom movie: MP4 video (Windows' own H.264 encoder), animated WebP, animated GIF, or
+// numbered PNG pictures in a folder.
 #pragma once
 
 #include <QImage>
@@ -10,14 +10,15 @@
 
 class MovieWriter {
 public:
-    enum class Format { Mp4 = 0, WebP = 1, PngFrames = 2 };
+    enum class Format { Mp4 = 0, WebP = 1, PngFrames = 2, Gif = 3 };
 
     virtual ~MovieWriter() = default;
     // `path`: the file (MP4, WebP) or the folder (PNG frames).
     static std::unique_ptr<MovieWriter> create(Format f, const QString& path, int w, int h, int fps, QString* error);
     static QStringList formatNames();             // index = Format
     static bool available(Format f, QString* why);
-    static QString extension(Format f);           // ".mp4", ".webp", "" (a folder)
+    static QString extension(Format f);           // ".mp4", ".webp", ".gif", "" (a folder)
+    static Format fromPath(const QString& path);  // by the extension; a folder (PNG frames) otherwise
 
     virtual bool add(const QImage& frame, QString* error) = 0;   // RGB32, the size given to create()
     virtual bool finish(QString* error) = 0;                     // writes what's left; the file is complete after

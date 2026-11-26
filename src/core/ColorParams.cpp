@@ -16,7 +16,8 @@ constexpr unsigned kMoire = 1u << int(ColorStyle::Moire);
 constexpr unsigned kDistance = 1u << int(ColorStyle::Distance);
 constexpr unsigned kStripes = 1u << int(ColorStyle::Stripes);
 constexpr unsigned kAngle = 1u << int(ColorStyle::Angle);
-constexpr unsigned kBanded = kGradient | kSine | kDistance | kStripes | kAngle;
+constexpr unsigned kTrap = 1u << int(ColorStyle::OrbitTrap);
+constexpr unsigned kBanded = kGradient | kSine | kDistance | kStripes | kAngle | kTrap;
 }  // namespace
 
 const QList<SliderSpec>& sliderSpecs()
@@ -33,6 +34,12 @@ const QList<SliderSpec>& sliderSpecs()
         {"moire_scale", "Pattern Scale", "COLOR",
          "The fabric pattern's frequency. 1 matches the original Python renders pixel for pixel.",
          0.05, 4.0, 1.0, 3, "", true, false, &C::moireScale, kMoire},
+        {"trap_x", "Trap X", "COLOR", "Where the trap sits, across. Changing it renders the view again.",
+         -2.0, 2.0, 0.0, 2, "", false, true, &C::trapX, kTrap},
+        {"trap_y", "Trap Y", "COLOR", "Where the trap sits, up and down. Changing it renders the view again.",
+         -2.0, 2.0, 0.0, 2, "", false, true, &C::trapY, kTrap},
+        {"trap_size", "Circle Radius", "COLOR", "The circle trap's radius. Changing it renders the view again.",
+         0.05, 4.0, 1.0, 2, "", true, true, &C::trapSize, kTrap},
 
         {"sine_freq_r", "Red Frequency", "SINE WAVES", "How many red waves pass per palette turn.", 0.0, 5.0, 1.0, 2, "", false, false, &C::sineFreqR, kSine},
         {"sine_freq_g", "Green Frequency", "SINE WAVES", "How many green waves pass per palette turn.", 0.0, 5.0, 1.0, 2, "", false, false, &C::sineFreqG, kSine},
@@ -59,6 +66,24 @@ const QList<SliderSpec>& sliderSpecs()
         {"gamma", "Gamma", "EFFECTS", "Below 1 lifts the dark colors; above 1 deepens them.", 0.3, 3.0, 1.0, 2, "", true, false, &C::gamma, 0},
         {"vignette", "Vignette", "EFFECTS", "Darkens the corners.", 0.0, 1.0, 0.0, 2, "", false, false, &C::vignette, 0},
         {"grain", "Film Grain", "EFFECTS", "Adds fine noise, like a photograph.", 0.0, 1.0, 0.0, 2, "", false, false, &C::grain, 0},
+        {"bloom", "Bloom", "EFFECTS", "Bright parts glow softly into their surroundings, like light in a camera lens.",
+         0.0, 2.0, 0.0, 2, "", false, false, &C::bloom, 0},
+        {"bloom_size", "Bloom Size", "EFFECTS", "How far the glow spreads, as a share of the picture's height.",
+         0.3, 15.0, 2.5, 1, "%", true, false, &C::bloomSize, 0},
+        {"bloom_threshold", "Bloom Threshold", "EFFECTS", "How bright a color must be to glow. Lower makes more of the picture glow.",
+         0.0, 1.0, 0.6, 2, "", false, false, &C::bloomThreshold, 0},
+
+        {"buddha_exposure", "Exposure", "BUDDHABROT", "How bright the counted orbits shine. Higher shows the faint ones.",
+         0.1, 10.0, 1.0, 2, "", true, false, &C::buddhaExposure, 0},
+        {"buddha_gamma", "Gamma", "BUDDHABROT", "Below 0.5 brings out the faint orbits; above, only the busiest paths stay bright.",
+         0.15, 2.0, 0.5, 2, "", true, false, &C::buddhaGamma, 0},
+
+        {"sphere_size", "Ball Size", "SPHERE", "Wraps the picture onto a ball this big (a share of the picture's height). 0 keeps it flat.",
+         0.0, 0.98, 0.0, 2, "", false, false, &C::sphereSize, 0},
+        {"sphere_shade", "Ball Shading", "SPHERE", "How much the light (from the LIGHTING card's direction) rounds the ball.",
+         0.0, 1.0, 0.6, 2, "", false, false, &C::sphereShade, 0},
+        {"sphere_shine", "Ball Shine", "SPHERE", "A glossy highlight where the light reflects off the ball.",
+         0.0, 1.0, 0.5, 2, "", false, false, &C::sphereShine, 0},
     };
     return list;
 }
@@ -73,7 +98,12 @@ const SliderSpec* sliderSpec(const QString& key)
 QStringList styleNames()
 {
     return {QStringLiteral("Smooth Gradient"), QStringLiteral("Sine Waves"), QStringLiteral("Moiré Fabric"),
-            QStringLiteral("Distance Bands"), QStringLiteral("Stripes"), QStringLiteral("Angle")};
+            QStringLiteral("Distance Bands"), QStringLiteral("Stripes"), QStringLiteral("Angle"), QStringLiteral("Orbit Trap")};
+}
+
+QStringList trapShapeNames()
+{
+    return {QStringLiteral("Point"), QStringLiteral("Cross"), QStringLiteral("Circle")};
 }
 
 QStringList interiorStyleNames()
@@ -93,13 +123,18 @@ QJsonObject ColorParams::toJson() const
     QJsonObject o;
     o.insert(QStringLiteral("style"), style);
     o.insert(QStringLiteral("palette"), palette);
+    // A palette of the user's own travels with the colors, so a shared location file brings it along.
+    if (isCustomPalette(palette)) o.insert(QStringLiteral("palette_stops"), paletteByName(palette).stopsJson());
     o.insert(QStringLiteral("color_scale"), colorScale);
+    o.insert(QStringLiteral("trap_shape"), trapShape);
+    o.insert(QStringLiteral("buddha_nebula"), buddhaNebula);
     for (const SliderSpec& s : sliderSpecs()) o.insert(QLatin1String(s.key), this->*(s.member));
     o.insert(QStringLiteral("moire_tint"), colorText(moireTint));
     o.insert(QStringLiteral("edge_color"), colorText(edgeColor));
     o.insert(QStringLiteral("interior_style"), interiorStyle);
     o.insert(QStringLiteral("interior_color"), colorText(interiorColor));
     o.insert(QStringLiteral("interior_color_2"), colorText(interiorColor2));
+    o.insert(QStringLiteral("sphere_background"), colorText(sphereBackground));
     return o;
 }
 
@@ -107,8 +142,17 @@ void ColorParams::fromJson(const QJsonObject& o)
 {
     const ColorParams d;
     style = std::clamp(o.value(QStringLiteral("style")).toInt(d.style), 0, int(styleNames().size()) - 1);
-    palette = paletteByName(o.value(QStringLiteral("palette")).toString(d.palette)).name;
+    const QString pname = o.value(QStringLiteral("palette")).toString(d.palette).trimmed();
+    if (!hasPalette(pname) && !pname.isEmpty()) {
+        Palette p;
+        p.name = pname.left(40);
+        p.stops = Palette::stopsFromJson(o.value(QStringLiteral("palette_stops")).toArray());
+        if (!p.stops.isEmpty()) putCustomPalette(p);
+    }
+    palette = paletteByName(pname).name;
     colorScale = std::clamp(o.value(QStringLiteral("color_scale")).toInt(d.colorScale), 0, 2);
+    trapShape = std::clamp(o.value(QStringLiteral("trap_shape")).toInt(d.trapShape), 0, int(trapShapeNames().size()) - 1);
+    buddhaNebula = std::clamp(o.value(QStringLiteral("buddha_nebula")).toInt(d.buddhaNebula), 0, 1);
     for (const SliderSpec& s : sliderSpecs()) {
         const double v = o.value(QLatin1String(s.key)).toDouble(d.*(s.member));
         this->*(s.member) = std::isfinite(v) ? std::clamp(v, s.min, s.max) : d.*(s.member);
@@ -123,6 +167,7 @@ void ColorParams::fromJson(const QJsonObject& o)
                                int(interiorStyleNames().size()) - 1);
     interiorColor = color("interior_color", d.interiorColor);
     interiorColor2 = color("interior_color_2", d.interiorColor2);
+    sphereBackground = color("sphere_background", d.sphereBackground);
 }
 
 const QList<Look>& looks()
@@ -153,6 +198,9 @@ const QList<Look>& looks()
             p.lightStrength = 0.3;
             p.vignette = 0.45;
             p.grain = 0.15;
+            p.bloom = 0.7;
+            p.bloomSize = 3.0;
+            p.bloomThreshold = 0.55;
             l.append({QStringLiteral("Nebula Glow"), p});
         }
         {

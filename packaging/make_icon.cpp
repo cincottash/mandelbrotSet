@@ -1,5 +1,5 @@
 // Renders resources/icon.svg to packaging/icon.ico (16-256 px, PNG-compressed entries) for the Windows exe.
-// Build and run it once after changing the SVG; see the README ("Changing the icon").
+// Build and run it once after changing the SVG: make_icon resources/icon.svg packaging/icon.ico
 #include <QBuffer>
 #include <QFile>
 #include <QGuiApplication>

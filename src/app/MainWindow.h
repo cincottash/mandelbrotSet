@@ -7,6 +7,7 @@
 #include "core/ColorParams.h"
 #include "core/Fractal.h"
 #include "core/Location.h"
+#include "core/Palette.h"
 
 #include <QHash>
 #include <QList>
@@ -71,6 +72,23 @@ public:
     bool recordZoomTo(const RecordSettings& s, const QString& path, QString* error,
                       const std::function<bool(int, int)>& progress = {});
     void setAutopilot(bool on);
+    void setAnimationPaused(bool on);
+    // Settings history (colors and formula): every change can be undone and redone.
+    void undo();
+    void redo();
+    int undoSteps() const { return int(m_undo.size()); }
+    int redoSteps() const { return int(m_redo.size()); }
+    void finishEdit();                 // ends the current run of slider moves now (tests)
+    void resetCard(const QString& title);
+    void randomizeEverything();
+    void randomizeColors();
+    // Edit Palette, in steps (the dialog drives these; tests call them directly): the picture follows the palette
+    // being edited; finishing with save keeps it among the user's palettes, else everything goes back.
+    void beginPaletteEdit();
+    void previewPalette(const core::Palette& p);
+    void finishPaletteEdit(bool save, const core::Palette& p);
+    void deleteCustomPalette(const QString& name);
+    QStringList paletteChoices() const;   // the palette list's entries, in order
     bool placeButtonsEnabled(bool* go, bool* rename, bool* remove) const;
 
 protected:
@@ -116,10 +134,21 @@ private:
     void back();
     void forward();
     void resetView();
-    void randomizeColors();
+    struct SettingsState {
+        core::FractalParams fractal;
+        core::ColorParams colors;
+    };
+    SettingsState currentSettings() const { return {m_fractal, m_colors}; }
+    void noteEdit();                   // a change is made: remember the state before it (once per run of moves)
+    void restoreSettings(const SettingsState& s);
+    void updateAnimationButtons();
     void showViewMenu(const QPoint& global, const QString& re, const QString& im);
+    void editPalette();
+    void refreshPaletteList();
     void switchToJulia(const QString& re, const QString& im);
     void switchToMandelbrot();
+    void switchFormula(core::Formula f);
+    void switchToBuddhabrot();
 
     void loadPlaces();
     void savePlaces();
@@ -150,6 +179,13 @@ private:
 
     // FRACTAL
     QComboBox* m_type = nullptr;
+    QComboBox* m_formula = nullptr;
+    // BUDDHABROT
+    QComboBox* m_buddhaColoring = nullptr;
+    SliderRow* m_buddhaRed = nullptr;
+    SliderRow* m_buddhaGreen = nullptr;
+    SliderRow* m_buddhaBlue = nullptr;
+    SliderRow* m_buddhaMin = nullptr;
     SliderRow* m_power = nullptr;
     SliderRow* m_escape = nullptr;
     QCheckBox* m_autoIter = nullptr;
@@ -163,16 +199,24 @@ private:
     QComboBox* m_look = nullptr;
     QComboBox* m_style = nullptr;
     QComboBox* m_palette = nullptr;
+    QToolButton* m_paletteEdit = nullptr;
+    // Edit Palette in progress: what to go back to on Cancel.
+    QList<core::Palette> m_palettesBeforeEdit;
+    core::ColorParams m_colorsBeforeEdit;
+    bool m_editingPalette = false;
     QComboBox* m_scale = nullptr;
     QLabel* m_paletteLabel = nullptr;
     QLabel* m_scaleLabel = nullptr;
     ColorButton* m_moireTint = nullptr;
     QLabel* m_moireTintLabel = nullptr;
+    QComboBox* m_trapShape = nullptr;
+    QLabel* m_trapShapeLabel = nullptr;
     ColorButton* m_edgeColor = nullptr;
     QComboBox* m_interior = nullptr;
     ColorButton* m_in1 = nullptr;
     ColorButton* m_in2 = nullptr;
     QLabel* m_in2Label = nullptr;
+    ColorButton* m_sphereBg = nullptr;
     // PLACES
     QListWidget* m_places = nullptr;
     QPushButton* m_goPlace = nullptr;
@@ -185,7 +229,17 @@ private:
     QPushButton* m_backBtn = nullptr;
     QPushButton* m_forwardBtn = nullptr;
     QPushButton* m_autoBtn = nullptr;
+    QPushButton* m_stopBtn = nullptr;
     QAction* m_autoAct = nullptr;
+    QAction* m_pauseAct = nullptr;
+    QAction* m_undoAct = nullptr;
+    QAction* m_redoAct = nullptr;
+
+    // Settings history
+    QList<SettingsState> m_undo, m_redo;
+    SettingsState m_lastState;          // the settings when the last run of changes ended
+    QTimer m_editBurst;                 // moves of one slider within a moment are one step
+    bool m_restoring = false;
 
     // Menus
     QMenu* m_viewMenu = nullptr;

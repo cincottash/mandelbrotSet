@@ -1,5 +1,7 @@
 #include "Palette.h"
 
+#include <QJsonValue>
+
 #include <algorithm>
 #include <cmath>
 
@@ -15,7 +17,105 @@ static Palette make(const char* name, std::initializer_list<const char*> colors)
     return p;
 }
 
-const QList<Palette>& palettes()
+namespace {
+QList<Palette>& customList()
+{
+    static QList<Palette> list;
+    return list;
+}
+QList<Palette>& allList()
+{
+    static QList<Palette> list = builtInPalettes();
+    return list;
+}
+int& revision()
+{
+    static int r = 0;
+    return r;
+}
+void rebuildAll()
+{
+    allList() = builtInPalettes() + customList();
+    ++revision();
+}
+}  // namespace
+
+const QList<Palette>& palettes() { return allList(); }
+const QList<Palette>& customPalettes() { return customList(); }
+int paletteRevision() { return revision(); }
+
+void setCustomPalettes(const QList<Palette>& list)
+{
+    customList().clear();
+    for (const Palette& p : list)
+        if (!p.name.trimmed().isEmpty() && p.stops.size() >= 2 && !isBuiltInPalette(p.name)) customList().append(p);
+    rebuildAll();
+}
+
+void putCustomPalette(const Palette& p)
+{
+    if (p.name.trimmed().isEmpty() || p.stops.size() < 2 || isBuiltInPalette(p.name)) return;
+    for (Palette& c : customList())
+        if (c.name.compare(p.name, Qt::CaseInsensitive) == 0) {
+            c = p;
+            rebuildAll();
+            return;
+        }
+    customList().append(p);
+    rebuildAll();
+}
+
+void removeCustomPalette(const QString& name)
+{
+    customList().removeIf([&](const Palette& p) { return p.name.compare(name, Qt::CaseInsensitive) == 0; });
+    rebuildAll();
+}
+
+bool isCustomPalette(const QString& name)
+{
+    for (const Palette& p : customList())
+        if (p.name.compare(name, Qt::CaseInsensitive) == 0) return true;
+    return false;
+}
+
+bool isBuiltInPalette(const QString& name)
+{
+    for (const Palette& p : builtInPalettes())
+        if (p.name.compare(name, Qt::CaseInsensitive) == 0) return true;
+    return false;
+}
+
+bool hasPalette(const QString& name) { return isBuiltInPalette(name) || isCustomPalette(name); }
+
+void Palette::sortStops()
+{
+    for (auto& s : stops) s.first = std::clamp(s.first, 0.0, 1.0);
+    std::stable_sort(stops.begin(), stops.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+}
+
+QJsonArray Palette::stopsJson() const
+{
+    QJsonArray a;
+    for (const auto& s : stops) a.append(QJsonArray{s.first, s.second.name(QColor::HexRgb).toUpper()});
+    return a;
+}
+
+QList<QPair<double, QColor>> Palette::stopsFromJson(const QJsonArray& a)
+{
+    QList<QPair<double, QColor>> out;
+    for (const QJsonValue& v : a) {
+        const QJsonArray s = v.toArray();
+        const double pos = s.at(0).toDouble(-1);
+        const QColor c(s.at(1).toString());
+        if (s.size() != 2 || !std::isfinite(pos) || pos < 0 || pos > 1 || !c.isValid()) return {};
+        out.append({pos, c});
+    }
+    if (out.size() < 2 || out.size() > 64) return {};
+    std::stable_sort(out.begin(), out.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+    return out;
+}
+
+const QList<Palette>& builtInPalettes()
 {
     // Evenly spaced stops; the last color blends back into the first, so every gradient repeats seamlessly.
     static const QList<Palette> list = {

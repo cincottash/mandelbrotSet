@@ -19,8 +19,11 @@ layout(std430, binding = 4) buffer Stats {
 } stats;
 // A pixel that needs more iterations than one dispatch may run saves where it is here and goes on in the next
 // dispatch, so no single dispatch runs long enough for the graphics driver to reset (Windows allows about 2 s).
-// Five vec4 per pixel of the tile.
+// Five vec4 per pixel, in the tile's own slot (several tiles run together).
 layout(std430, binding = 5) buffer State { vec4 st[]; };
+// Inside-the-set boxing: 1 for each block whose whole border is inside the set. The set of points that haven't
+// escaped after N iterations has no holes (an escape lemniscate), so everything the border encloses is inside too.
+layout(std430, binding = 6) readonly buffer Blocks { uint blockInside[]; };
 
 uniform ivec2 uOrigin;
 uniform ivec2 uTileSize;
@@ -39,14 +42,47 @@ uniform float uLogBailout;
 uniform int uRefLen;
 uniform bool uRefEscaped;
 uniform int uPower;
+uniform int uFormula;         // 0 classic, 1 Burning Ship, 2 Tricorn (tier F only; the wide tier is classic power 2)
 uniform bool uJulia;
 uniform int uBlaLevels;
 uniform int uBlaOffset[32];
 uniform int uBlaCount[32];
 uniform bool uStripe;
 uniform float uStripeDensity;
+// Orbit trap: the closest the orbit comes to a shape (-1 off, 0 point, 1 cross, 2 circle), kept where the stripes
+// average would be (the two styles never run together).
+uniform int uTrap;
+uniform vec2 uTrapC;
+uniform float uTrapR;
+
+float trapDist(vec2 z)
+{
+    vec2 d = z - uTrapC;
+    if (uTrap == 0) return length(d);
+    if (uTrap == 1) return min(abs(d.x), abs(d.y));
+    return abs(length(d) - uTrapR);
+}
 uniform int uIterBudget;      // iterations a pixel may run in this dispatch
 uniform bool uResume;         // go on from the saved state (a later dispatch of the same tile)
+uniform int uStateBase;       // the tile's first pixel slot in the state buffer
+uniform int uPixelSet;        // 0 every pixel; boxing: 1, 2, 3 (see main)
+uniform int uBlockBase;       // the tile's first entry in blockInside (4 big blocks, then 64 small ones)
+uniform bool uShallowCheck;   // shallow Mandelbrot views: the main cardioid and the period-2 disk are inside outright
+uniform vec2 uRefC;           // the reference point, for that check
+
+const int BLOCK1 = 64, BLOCK2 = 16;
+
+bool onBlockBorder(ivec2 local, int size)
+{
+    ivec2 lo = (local / size) * size;
+    ivec2 hi = min(min(lo + size, uTileSize), uSize - uOrigin) - 1;
+    return local.x == lo.x || local.y == lo.y || local.x == hi.x || local.y == hi.y;
+}
+bool blockFlag(ivec2 local, int size, int first)
+{
+    ivec2 b = local / size;
+    return blockInside[uBlockBase + first + b.y * ((uTileSize.x + size - 1) / size) + b.x] != 0u;
+}
 
 const int ZERO_E = -1000000000;
 const float BIG = 1.0e30;
@@ -108,26 +144,49 @@ vec2 refXf(int i)
     return ldx(r.m.xy, r.e.x);
 }
 
-// A rebase replaces dz by the whole z = Z + dz (it is near zero, closer than the reference). Z's low part is added
-// after the cancelling sum, so the small result keeps its digits.
+// A rebase goes back to the start of the reference orbit: the new offset is the whole z = Z + dz less the orbit's
+// first value (0 for the Mandelbrot set; the reference point for a Julia set). Z's low part is added after the
+// cancelling sum, so a small result keeps its digits.
 vec2 rebaseF(int i, vec2 dz)
 {
     vec4 R = refF[i];
-    return (R.xy + dz) + R.zw;
+    vec2 z = (R.xy + dz) + R.zw;
+    if (uJulia) {
+        vec4 R0 = refF[0];
+        z = (z - R0.xy) - R0.zw;
+    }
+    return z;
 }
 FC rebaseX(int i, FC dz)
 {
     RefXEntry r = refX[i];
-    if (r.e.x <= -(1 << 29)) return dz;
-    return fcAdd(fcAdd(FC(r.m.xy, r.e.x), dz), fcNorm(r.m.zw, r.e.x));
+    FC z = r.e.x <= -(1 << 29) ? dz : fcAdd(fcAdd(FC(r.m.xy, r.e.x), dz), fcNorm(r.m.zw, r.e.x));
+    if (uJulia) {
+        RefXEntry r0 = refX[0];
+        if (r0.e.x > -(1 << 29)) z = fcAdd(fcAdd(z, FC(-r0.m.xy, r0.e.x)), fcNorm(-r0.m.zw, r0.e.x));
+    }
+    return z;
 }
 vec2 rebaseXF(int i, vec2 dz)
 {
     RefXEntry r = refX[i];
-    return (ldx(r.m.xy, r.e.x) + dz) + ldx(r.m.zw, r.e.x);
+    vec2 z = (ldx(r.m.xy, r.e.x) + dz) + ldx(r.m.zw, r.e.x);
+    if (uJulia) {
+        RefXEntry r0 = refX[0];
+        z = (z - ldx(r0.m.xy, r0.e.x)) - ldx(r0.m.zw, r0.e.x);
+    }
+    return z;
 }
 
 shared uint sMaxN, sMaxIdx, sGlitch, sNear, sEsc, sMaxEsc, sInside;
+
+// |c + d| - |c|, by cases, exact when d is tiny next to c.
+float diffabs(float c, float d)
+{
+    float cd = c + d;
+    if (c >= 0.0) return cd >= 0.0 ? d : -(2.0 * c + d);
+    return cd > 0.0 ? 2.0 * c + d : -d;
+}
 
 float binom(int nn, int k)
 {
@@ -147,20 +206,35 @@ void main()
     ivec2 p = uOrigin + local;
     bool inTile = local.x < uTileSize.x && local.y < uTileSize.y && p.x < uSize.x && p.y < uSize.y;
 
+    // Boxing in two sizes: 1) the borders of 64-pixel blocks; 2) the borders of 16-pixel blocks inside the big blocks
+    // that weren't all inside; 3) the rest, filled where an enclosing block's border was all inside.
+    bool boxedInside = false;
+    if (inTile && uPixelSet != 0) {
+        const bool on1 = onBlockBorder(local, BLOCK1), on2 = onBlockBorder(local, BLOCK2);
+        const bool in1 = !on1 && uPixelSet >= 2 && blockFlag(local, BLOCK1, 0);
+        if (uPixelSet == 1) inTile = on1;
+        else if (uPixelSet == 2) inTile = !on1 && on2 && !in1;
+        else {
+            inTile = !on1 && (!on2 || in1);
+            boxedInside = in1 || (!on2 && blockFlag(local, BLOCK2, 4));
+        }
+    }
+
     int n = 0;
     bool glitch = false;
     bool inside = true;
     float r2 = 0.0;
     vec2 z = vec2(0.0);
     vec2 Dm = vec2(0.0);
+    vec2 Dm2 = vec2(0.0);   // the second column (Burning Ship and Tricorn only), same exponent De
     int De = uScaleE;
     float firstR = 0.0;
     float minR2 = BIG;
-    float stripe = 0.0, stripePrev = 0.0;
+    float stripe = uTrap >= 0 ? BIG : 0.0, stripePrev = 0.0;
     int stripeCount = 0;
     bool finished = true;   // false: the budget ran out first; the state is saved for the next dispatch
     bool skip = false;      // finished in an earlier dispatch of this tile: nothing to do
-    const int si = (local.y * uTileSize.x + local.x) * 5;
+    const int si = (uStateBase + local.y * uTileSize.x + local.x) * 5;
 
     if (inTile) {
         vec2 q =(vec2(p) + 0.5 + uJitter - 0.5 * vec2(uSize)) * uInvHalfH;
@@ -168,7 +242,13 @@ void main()
         vec2 qr = vec2(q.x * uRot.x - q.y * uRot.y, q.x * uRot.y + q.y * uRot.x);
         // The derivative is kept as Dm * 2^De; dc/dq = rotation * scale.
         vec2 Dadd = uRot * uScaleM;
-        if (uJulia) Dm = Dadd;
+        // The Burning Ship and the Tricorn don't keep angles, so their derivative needs the second column too
+        // (along the screen's other direction); the classic formula's is i times the first.
+        vec2 Dadd2 = vec2(-Dadd.y, Dadd.x);
+        if (uJulia) {
+            Dm = Dadd;
+            if (uFormula != 0) Dm2 = Dadd2;
+        }
         int m = 0;
         int p1 = uPower - 1;
 
@@ -186,6 +266,12 @@ void main()
         vec2 dz = uJulia ? dc : vec2(0.0);
         vec2 c = uJulia ? vec2(0.0) : dc;
         z = refF[0].xy + dz;
+        if (uShallowCheck) {
+            // Inside the main cardioid or the period-2 disk: inside for sure, no iterations needed.
+            vec2 cc = uRefC + dc;
+            float x = cc.x - 0.25, q = x * x + cc.y * cc.y;
+            if (q * (q + x) < 0.25 * cc.y * cc.y || (cc.x + 1.0) * (cc.x + 1.0) + cc.y * cc.y < 0.0625) boxedInside = true;
+        }
 #endif
         r2 = dot(z, z);
 
@@ -212,8 +298,10 @@ void main()
             wide = floatBitsToInt(s4.w) != 0;
 #else
             dz = s0.xy;
+            Dm2 = st[si + 4].xy;
 #endif
         }
+        if (boxedInside && !skip) n = uMaxIter;   // enclosed by inside pixels: inside, without iterating
         const int nStop = skip ? n : min(uMaxIter, n + uIterBudget);
 
         while (n < nStop) {
@@ -255,6 +343,7 @@ void main()
                     r2 = dot(z, z);
                     if (r2 > uBailout2) { inside = false; break; }
                     minR2 = min(minR2, r2);
+                    if (uTrap >= 0) stripe = min(stripe, trapDist(z));
                     if (fcLog2(zX) < fcLog2(dzX) || m >= uRefLen) {
                         if (m >= uRefLen && uRefEscaped) glitch = true;
                         dzX = rebaseX(m, dzX);
@@ -282,6 +371,7 @@ void main()
                     r2 = dot(z, z);
                     if (r2 > uBailout2) { inside = false; break; }
                     minR2 = min(minR2, r2);
+                    if (uTrap >= 0) stripe = min(stripe, trapDist(z));
                     if (infNorm(z) < infNorm(dz) || m >= uRefLen) {
                         if (m >= uRefLen && uRefEscaped) glitch = true;
                         dz = rebaseF(m, dz);
@@ -296,12 +386,32 @@ void main()
             }
 
             // 2. One ordinary step. The derivative first, with z before the step: D' = p z^(p-1) D + dc/dq.
-            vec2 zp1 = z;
-            for (int k = 1; k < p1; ++k) zp1 = cmul(zp1, z);
-            Dm = float(uPower) * cmul(zp1, Dm) + (uJulia ? vec2(0.0) : ldx(Dadd, uScaleE - De));
-            float dmx = infNorm(Dm);
-            if (dmx > 1.0e12) { Dm = ldx(Dm, -40); De += 40; }
-            else if (dmx < 1.0e-12 && dmx > 0.0) { Dm = ldx(Dm, 40); De -= 40; }
+            if (uFormula == 1) {
+                // Burning Ship: the Jacobian of (x^2 - y^2, 2|xy|) applied to both columns; c's imaginary part
+                // enters negated.
+                float sg = z.x * z.y >= 0.0 ? 1.0 : -1.0;
+                Dm = 2.0 * vec2(z.x * Dm.x - z.y * Dm.y, sg * (z.y * Dm.x + z.x * Dm.y));
+                Dm2 = 2.0 * vec2(z.x * Dm2.x - z.y * Dm2.y, sg * (z.y * Dm2.x + z.x * Dm2.y));
+                if (!uJulia) {
+                    vec2 a = ldx(Dadd, uScaleE - De), b = ldx(Dadd2, uScaleE - De);
+                    Dm += vec2(a.x, -a.y);
+                    Dm2 += vec2(b.x, -b.y);
+                }
+            } else {
+                vec2 zp1 = z;
+                for (int k = 1; k < p1; ++k) zp1 = cmul(zp1, z);
+                vec2 t = float(uPower) * cmul(zp1, Dm);
+                if (uFormula == 2) {
+                    // Tricorn: D' = p conj(z^(p-1) D) + dc/dq, for both columns.
+                    t.y = -t.y;
+                    vec2 t2 = float(uPower) * cmul(zp1, Dm2);
+                    Dm2 = vec2(t2.x, -t2.y) + (uJulia ? vec2(0.0) : ldx(Dadd2, uScaleE - De));
+                }
+                Dm = t + (uJulia ? vec2(0.0) : ldx(Dadd, uScaleE - De));
+            }
+            float dmx = max(infNorm(Dm), infNorm(Dm2));
+            if (dmx > 1.0e12) { Dm = ldx(Dm, -40); Dm2 = ldx(Dm2, -40); De += 40; }
+            else if (dmx < 1.0e-12 && dmx > 0.0) { Dm = ldx(Dm, 40); Dm2 = ldx(Dm2, 40); De -= 40; }
 
 #ifdef TIER_X
             if (wide) {
@@ -335,8 +445,16 @@ void main()
             }
 #else
             vec2 Z = refF[m].xy;
-            if (uPower == 2) {
-                dz = cmul(2.0 * Z + dz, dz) + c;
+            if (uFormula == 1) {
+                // Burning Ship: x' = 2Xx + x^2 - 2Yy - y^2 + cx; y' = 2 (|XY + d| - |XY|) - cy with d = Xy + xY + xy,
+                // the difference of absolute values worked out by cases so no digits cancel.
+                float nx = (2.0 * Z.x + dz.x) * dz.x - (2.0 * Z.y + dz.y) * dz.y + c.x;
+                float ny = 2.0 * diffabs(Z.x * Z.y, Z.x * dz.y + dz.x * Z.y + dz.x * dz.y) - c.y;
+                dz = vec2(nx, ny);
+            } else if (uPower == 2) {
+                vec2 d = cmul(2.0 * Z + dz, dz);
+                if (uFormula == 2) d.y = -d.y;   // Tricorn: conj((Z + dz)^2 - Z^2)
+                dz = d + c;
             } else {
                 // (Z + dz)^p - Z^p = dz * sum_k C(p,k) Z^(p-k) dz^(k-1), by Horner's rule in dz.
                 vec2 zpow[8];
@@ -344,7 +462,9 @@ void main()
                 for (int k = 1; k < uPower; ++k) zpow[k] = cmul(zpow[k - 1], Z);
                 vec2 acc = vec2(1.0, 0.0);
                 for (int k = uPower - 1; k >= 1; --k) acc = cmul(acc, dz) + binom(uPower, k) * zpow[uPower - k];
-                dz = cmul(acc, dz) + c;
+                vec2 d = cmul(acc, dz);
+                if (uFormula == 2) d.y = -d.y;
+                dz = d + c;
             }
             ++m; ++n;
             z = refF[m].xy + dz;
@@ -358,6 +478,7 @@ void main()
 #endif
             if (firstR == 0.0 && r2 > 4.0) firstR = sqrt(r2);
             minR2 = min(minR2, r2);
+            if (uTrap >= 0) stripe = min(stripe, trapDist(z));
             if (uStripe) {
                 stripePrev = stripe;
                 float s = 0.5 + 0.5 * sin(uStripeDensity * atan(z.y, z.x));
@@ -375,6 +496,7 @@ void main()
             st[si + 4] = vec4(dzX.m, intBitsToFloat(dzX.e), intBitsToFloat(wide ? 1 : 0));
 #else
             st[si] = vec4(dz, Dm);
+            st[si + 4] = vec4(Dm2, 0.0, 0.0);
 #endif
             st[si + 1] = vec4(z, firstR, minR2);
             st[si + 2] = vec4(stripe, stripePrev, intBitsToFloat(stripeCount), r2);
@@ -394,13 +516,15 @@ void main()
         } else {
             float lz = 0.5 * log(r2);
             float mu = float(n) - log2(max(lz / uLogBailout, 1.0e-6)) / log2(float(uPower));
-            float lenD = length(Dm);
+            // The potential's gradient over the screen is (D1 . z, D2 . z) / |z|^2; for the classic formula that is
+            // z conj(D) / |z|^2, since D2 = i D1.
+            vec2 u = uFormula == 0 ? cmul(z, vec2(Dm.x, -Dm.y)) : vec2(dot(Dm, z), dot(Dm2, z));
+            float lenD = uFormula == 0 ? length(Dm) : length(u) / max(sqrt(r2), 1.0e-30);
             float l2de = log2(sqrt(r2) * lz * uHalfH / max(lenD, 1.0e-30)) - float(De);
             float de = exp2(clamp(l2de, -60.0, 60.0));
-            vec2 u = cmul(z, vec2(Dm.x, -Dm.y));
             float ul = length(u);
             vec2 nrm = ul > 0.0 ? u / ul : vec2(0.0);
-            float stripeV = mix(stripePrev, stripe, clamp(fract(mu), 0.0, 1.0));
+            float stripeV = uTrap >= 0 ? stripe : mix(stripePrev, stripe, clamp(fract(mu), 0.0, 1.0));
             o0 = vec4(mu, de, nrm);
             o1 = vec4(firstR, atan(z.y, z.x), stripeV, 0.0);
         }

@@ -1,0 +1,80 @@
+// Buddhabrot and Nebulabrot: random points c are followed until they escape; every point an escaping orbit visits is
+// counted in the picture. Three counts per pixel, one per iteration limit (the Nebulabrot's red, green and blue): an
+// orbit that escapes within a channel's limit counts in that channel. Single precision is enough here (these views
+// stay shallow).
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 7) buffer Hist { uint hist[]; };      // w * h * 3 counts
+layout(std430, binding = 8) buffer HistMax { uint histMax[]; }; // the largest count per channel
+
+uniform ivec2 uSize;
+uniform vec2 uCenter;
+uniform float uInvScale;      // 1 / (half the view's height)
+uniform vec2 uRot;            // (cos, sin) of minus the view's angle
+uniform ivec3 uLimits;        // red, green, blue iteration limits
+uniform int uMaxLimit;
+uniform int uMinIter;
+uniform int uFormula;
+uniform int uPower;
+uniform vec2 uBoxMin;         // where c is drawn from
+uniform vec2 uBoxSize;
+uniform uint uSeed;
+uniform bool uSkipBulbs;      // classic power 2: the main cardioid and the period-2 disk never escape
+
+uint pcg(uint v)
+{
+    uint state = v * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+float rnd(inout uint s) { s = pcg(s); return float(s) * (1.0 / 4294967296.0); }
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+vec2 stepZ(vec2 z, vec2 c)
+{
+    if (uFormula == 1) return vec2(z.x * z.x - z.y * z.y + c.x, 2.0 * abs(z.x * z.y) - c.y);
+    vec2 w = z;
+    for (int k = 1; k < uPower; ++k) w = cmul(w, z);
+    if (uFormula == 2) w.y = -w.y;
+    return w + c;
+}
+
+void main()
+{
+    uint s = pcg(gl_GlobalInvocationID.x * 2654435761u ^ uSeed);
+    vec2 c = uBoxMin + vec2(rnd(s), rnd(s)) * uBoxSize;
+    if (uSkipBulbs) {
+        float x = c.x - 0.25, q = x * x + c.y * c.y;
+        if (q * (q + x) < 0.25 * c.y * c.y || (c.x + 1.0) * (c.x + 1.0) + c.y * c.y < 0.0625) return;
+    }
+    // First pass: does it escape, and when?
+    vec2 z = vec2(0.0);
+    int n = 0;
+    for (; n < uMaxLimit; ++n) {
+        z = stepZ(z, c);
+        if (dot(z, z) > 16.0) break;
+    }
+    if (n >= uMaxLimit || n < uMinIter) return;
+    bvec3 counts = bvec3(n < uLimits.x, n < uLimits.y, n < uLimits.z);
+    // Second pass: count the orbit's points in the picture.
+    z = vec2(0.0);
+    uvec3 localMax = uvec3(0u);
+    for (int k = 0; k < n; ++k) {
+        z = stepZ(z, c);
+        // The first two points (c itself, and c^2 + c) only trace out where the random points were drawn from.
+        if (k < 2) continue;
+        vec2 d = (z - uCenter) * uInvScale;
+        vec2 q = vec2(d.x * uRot.x - d.y * uRot.y, d.x * uRot.y + d.y * uRot.x);
+        ivec2 p = ivec2(floor(0.5 * float(uSize.x) + q.x * 0.5 * float(uSize.y)), floor(0.5 * float(uSize.y) - q.y * 0.5 * float(uSize.y)));
+        if (p.x < 0 || p.y < 0 || p.x >= uSize.x || p.y >= uSize.y) continue;
+        uint base = uint(p.y * uSize.x + p.x) * 3u;
+        if (counts.x) localMax.x = max(localMax.x, atomicAdd(hist[base], 1u) + 1u);
+        if (counts.y) localMax.y = max(localMax.y, atomicAdd(hist[base + 1u], 1u) + 1u);
+        if (counts.z) localMax.z = max(localMax.z, atomicAdd(hist[base + 2u], 1u) + 1u);
+    }
+    if (localMax.x > 0u) atomicMax(histMax[0], localMax.x);
+    if (localMax.y > 0u) atomicMax(histMax[1], localMax.y);
+    if (localMax.z > 0u) atomicMax(histMax[2], localMax.z);
+}

@@ -187,8 +187,10 @@ void FractalView::applyZoom(double u, double v, double factor)
         const core::FloatExp target = m_view.scale * core::FloatExp(1.0 / factor);
         if (target < m_core->minimumScale()) {
             m_zoomPending = 0;
-            emit zoomLimitReached(QStringLiteral("Power %1 can zoom to about 1e-24. Power 2 can zoom without limit.")
-                                      .arg(m_fractal.power));
+            emit zoomLimitReached(m_fractal.classic()
+                                      ? QStringLiteral("Power %1 can zoom to about 1e-24. Power 2 can zoom without limit.").arg(m_fractal.power)
+                                      : QStringLiteral("The %1 can zoom to about 1e-24. The classic formula at power 2 can zoom without limit.")
+                                            .arg(core::formulaNames().value(int(m_fractal.formula))));
             return;
         }
     }
@@ -265,12 +267,13 @@ void FractalView::paintGL()
     autopilotAdvance(dt, now);
     const qreal dpr = devicePixelRatioF();
     const int W = std::max(1, int(std::lround(width() * dpr))), H = std::max(1, int(std::lround(height() * dpr)));
-    const bool animating = m_autopilot || std::fabs(m_zoomPending) > 1e-4 || m_panPending != QPointF()
+    const bool animating = (m_autopilot && !m_paused) || std::fabs(m_zoomPending) > 1e-4 || m_panPending != QPointF()
         || std::fabs(m_rotatePending) > 1e-5;
     const bool moving = m_dragging || m_rotating || animating || (now - m_lastChangeNs) < 150'000'000;
+    if (!m_paused) m_animTime += dt;
     m_core->setView(m_view);
     m_core->setOutputSize(W, H);
-    m_core->setTime(double(now) / 1e9);
+    m_core->setTime(m_animTime);
     const bool more = m_core->step(moving ? 8.0 : 22.0, moving);
     f->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
     m_gpu.display(m_core->picture(), m_view, W, H, kBackground);
@@ -311,6 +314,7 @@ bool FractalView::beginMovie(const core::View& deepest, int w, int h)
     setAutopilot(false);
     m_inMovie = true;
     m_exporting = true;
+    m_movieKeyframes = 0;
     makeCurrent();
     const bool ok = m_core->prepareReference(deepest, w, h);
     doneCurrent();
@@ -336,11 +340,63 @@ std::vector<float> FractalView::probeEscapeTimes(const core::View& v, int w, int
     return mu;
 }
 
+QImage FractalView::renderMovieFrame(const core::View& v, int w, int h, int ss, double timeSeconds, QString* error,
+                                     const std::function<bool(double)>& progress)
+{
+    if (!m_tried) grabFramebuffer();
+    if (!m_ok) {
+        if (error) *error = m_error;
+        return {};
+    }
+    // A keyframe covers a little more than the frame (M) at D0 keyframe pixels per frame pixel; frames are taken from
+    // it until the zoom brings that down to D0 / sqrt(2) (two keyframes per halving of the view), or the view leaves it.
+    ss = std::clamp(ss, 1, 4);
+    if (m_fractal.buddhabrot()) return renderPicture(v, w, h, ss, error, progress, timeSeconds);   // counted per frame
+    const double D0 = std::max(2.0, double(ss)), M = 1.15;
+    const int kw = int(std::ceil(w * D0 * M)), kh = int(std::ceil(h * D0 * M));
+    if (qint64(kw) * kh > render::RenderCore::kMaxRawPixels || kw > 16384 || kh > 16384)
+        return renderPicture(v, w, h, ss, error, progress, timeSeconds);   // too large to keep: every frame in full
+    m_exporting = true;
+    makeCurrent();
+    m_core->setTime(timeSeconds);
+    if (!m_gpu.keyCovers(m_movieKey, v, w, h, D0 / std::sqrt(2.0))) {
+        core::View kv = v;
+        kv.scale = v.scale * core::FloatExp(M);
+        const bool ok = m_core->renderRaw(kv, kw, kh, 1, &m_movieKey, error, [&](double p) {
+            const bool goOn = !progress || progress(p);
+            makeCurrent();
+            return goOn;
+        });
+        if (!ok) {
+            doneCurrent();
+            return {};
+        }
+        ++m_movieKeyframes;
+    }
+    QImage img;
+    if (m_gpu.resample(m_movieKey, v, w, h, ss, m_movieFrame)) {
+        m_gpu.colorize(m_movieFrame, m_colors, timeSeconds, m_movieTarget);
+        img = m_gpu.readTarget(m_movieTarget);
+    } else if (error) {
+        *error = QStringLiteral("The frame couldn't be taken from its keyframe.");
+    }
+    doneCurrent();
+    return img;
+}
+
 void FractalView::endMovie()
 {
+    if (m_ok && (m_movieKey.tex0 || m_movieFrame.tex0 || m_movieTarget.fbo)) {
+        makeCurrent();
+        m_gpu.freeFrame(m_movieKey);
+        m_gpu.freeFrame(m_movieFrame);
+        m_gpu.freeTarget(m_movieTarget);
+        doneCurrent();
+    }
+    m_movieKey = render::RawFrame();
     m_inMovie = false;
     m_exporting = false;
-    if (m_core) m_core->setTime(m_clock.nsecsElapsed() / 1e9);
+    if (m_core) m_core->setTime(m_animTime);
     update();
 }
 
@@ -508,6 +564,7 @@ void FractalView::keyPressEvent(QKeyEvent* e)
         if (m_autopilot) setAutopilot(false);
         stopMotion();
         break;
+    case Qt::Key_Space: setPaused(!m_paused); break;
     default: QOpenGLWidget::keyPressEvent(e); return;
     }
     e->accept();
@@ -522,9 +579,18 @@ void FractalView::leaveEvent(QEvent* e)
 
 // ---------------------------------------------------------------- autopilot
 
+void FractalView::setPaused(bool on)
+{
+    if (on == m_paused) return;
+    m_paused = on;
+    emit pausedChanged(on);
+    update();
+}
+
 void FractalView::setAutopilot(bool on)
 {
-    if (on == m_autopilot || (on && !m_ok)) return;
+    if (on == m_autopilot || (on && (!m_ok || m_fractal.buddhabrot()))) return;
+    if (!on) setPaused(false);
     m_autopilot = on;
     m_autoHasTarget = false;
     m_autoNextLookNs = 0;
@@ -589,7 +655,7 @@ bool FractalView::pickAutopilotTarget(QPointF* target)
 
 void FractalView::autopilotAdvance(double dt, qint64 now)
 {
-    if (!m_autopilot || !m_core) return;
+    if (!m_autopilot || !m_core || m_paused) return;
     if (now >= m_autoNextLookNs) {
         m_autoNextLookNs = now + 250'000'000;
         QPointF t;
@@ -623,8 +689,9 @@ void FractalView::autopilotAdvance(double dt, qint64 now)
     const double factor = std::exp(rate * dt);
     if (factor > 1.0 && m_view.scale * core::FloatExp(1.0 / factor) < m_core->minimumScale()) {
         setAutopilot(false);
-        emit zoomLimitReached(QStringLiteral("The autopilot stopped at the deepest zoom power %1 allows (about 1e-24).")
-                                  .arg(m_fractal.power));
+        emit zoomLimitReached(QStringLiteral("The autopilot stopped at the deepest zoom %1 allows (about 1e-24).")
+                                  .arg(m_fractal.classic() ? QStringLiteral("power %1").arg(m_fractal.power)
+                                                           : QStringLiteral("the ") + core::formulaNames().value(int(m_fractal.formula))));
         return;
     }
     m_view.zoomAt(0, 0, factor);
