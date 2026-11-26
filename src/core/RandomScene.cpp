@@ -112,7 +112,8 @@ bool dive(const FractalParams& f, std::complex<double> seed, int steps, QRandomG
 
 // How much of a view has visible structure: the share of neighbors on a 32 x 20 grid whose escape times differ
 // clearly (or where one is inside and the other not). A view with a speck of detail in a flat field scores low.
-double busyShare(const FractalParams& f, std::complex<double> center, double scale, double angle, std::complex<double> seed)
+double busyShare(const FractalParams& f, std::complex<double> center, double scale, double angle, std::complex<double> seed,
+                 double* flatShare = nullptr)
 {
     const int gw = 32, gh = 20, maxIt = 4000;
     const std::complex<double> rot = std::polar(1.0, angle);
@@ -124,14 +125,22 @@ double busyShare(const FractalParams& f, std::complex<double> center, double sca
             const int n = f.julia() ? escapeTime(p, seed, f, maxIt) : escapeTime(0.0, p, f, maxIt);
             v[size_t(y * gw + x)] = n < 0 ? -1.0 : std::log(1.0 + n);
         }
-    int busy = 0, pairs = 0;
+    int busy = 0, pairs = 0, flat = 0;
     auto differ = [](double a, double b) { return (a < 0) != (b < 0) || (a >= 0 && std::abs(a - b) > 0.12); };
     for (int y = 0; y < gh; ++y)
         for (int x = 0; x < gw; ++x) {
             const double a = v[size_t(y * gw + x)];
             if (x + 1 < gw) { ++pairs; busy += differ(a, v[size_t(y * gw + x + 1)]); }
             if (y + 1 < gh) { ++pairs; busy += differ(a, v[size_t((y + 1) * gw + x)]); }
+            // A cell is flat when none of its neighbors differs from it.
+            bool any = false;
+            for (const auto& [dx, dy] : {std::pair{1, 0}, std::pair{-1, 0}, std::pair{0, 1}, std::pair{0, -1}}) {
+                const int nx = x + dx, ny = y + dy;
+                if (nx >= 0 && ny >= 0 && nx < gw && ny < gh) any = any || differ(a, v[size_t(ny * gw + nx)]);
+            }
+            flat += !any;
         }
+    if (flatShare) *flatShare = double(flat) / (gw * gh);
     return double(busy) / pairs;
 }
 
@@ -347,7 +356,10 @@ Scene randomScene(QRandomGenerator& rnd)
         const double degrees = chance(rnd, 0.6) ? uniform(rnd, 0.0, 360.0) : 0.0;
         // Skip a spot that would show one flat color, or a speck of detail in a flat field.
         const Sampled look = sample(s.fractal, center, scale, seed, rnd, 300, 4000, nullptr);
-        const double busy = look.escapedShare > 0.1 ? busyShare(s.fractal, center, scale, -degrees * std::numbers::pi / 180.0, seed) : 0.0;
+        double flat = 1.0;
+        double busy = look.escapedShare > 0.1
+            ? busyShare(s.fractal, center, scale, -degrees * std::numbers::pi / 180.0, seed, &flat) : 0.0;
+        if (flat > 0.55) busy *= 0.5;   // detail in a corner of a mostly flat view counts for less
         QJsonObject o;
         o.insert(QStringLiteral("re"), QString::number(center.real(), 'g', 17));
         o.insert(QStringLiteral("im"), QString::number(center.imag(), 'g', 17));

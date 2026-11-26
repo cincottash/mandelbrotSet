@@ -33,8 +33,21 @@ fine. Then scroll to zoom.
 | **Ctrl+R** | Randomize: a random fractal, spot and colors |
 | **Ctrl+Z, Ctrl+Y** | undo and redo changes to the colors and the formula |
 
-**Randomize** (bottom left) picks a random fractal (Mandelbrot, Julia or a higher power), dives to a random spot
-with visible detail and colors it at random. Keep pressing it for new ones; Undo and Back return to earlier ones.
+**Randomize** (bottom left) picks a random fractal (Mandelbrot, Julia, a higher power, the Burning Ship or the
+Tricorn), dives to a random spot with visible detail and colors it at random. Keep pressing it for new ones; Undo
+and Back return to earlier ones.
+
+![Twenty-four presses of Randomize](docs/random.png)
+
+## Fractals
+
+**Type** chooses the Mandelbrot set, a Julia set (right-click any point for its Julia set) or the **Buddhabrot**:
+the Mandelbrot set drawn by where its escaping orbits travel, counted on the graphics card and filling in over a
+few seconds, as the three-color **Nebulabrot** or through a palette. **Formula** chooses the classic z² + c, the
+**Burning Ship** or the **Tricorn**; Power raises the exponent. The classic formula at power 2 zooms without limit;
+the others go to about 10⁻²⁴.
+
+![The Burning Ship, the Tricorn, Julia sets and the Nebulabrot](docs/fractals.png)
 
 The status line shows the center, the zoom, the iteration limit and how long the picture took. Back and Forward
 step through the views you visited. **Places** holds famous spots to start from and the ones you save.
@@ -42,13 +55,20 @@ step through the views you visited. **Places** holds famous spots to start from 
 ## Colors
 
 Ten ready-made **Looks**, and every setting behind them as a slider: the style (smooth gradient, sine waves,
-distance bands, stripes, angle, and the original Python renders' **moiré fabric**), 20 palettes, density, offset,
-color cycling, lighting (angle, height, relief, shine), glowing edges, the inside's color or gradient, and effects
-(hue, saturation, brightness, contrast, gamma, vignette, film grain). Right-click any slider to put it back,
-click **Reset** on a card to put back all of that card's settings, or use **Edit > Reset Colors to Defaults**.
-Every change can be undone. Colors change instantly: only the fractal's shape takes rendering.
+distance bands, stripes, angle, **orbit traps**, and the original Python renders' **moiré fabric**), 20 palettes
+plus your own, density, offset, color cycling, lighting (angle, height, relief, shine), glowing edges, the inside's
+color or gradient, and effects (hue, saturation, brightness, contrast, gamma, vignette, film grain, **bloom**). The
+**Sphere** card wraps the picture onto a lit ball. Right-click any slider to put it back, click **Reset** on a card
+to put back all of that card's settings, or use **Edit > Reset Colors to Defaults**. Every change can be undone.
+Colors change instantly: only the fractal's shape takes rendering.
 
 ![Every look at the same place](docs/looks.png)
+
+**Edit…** beside the palette (or Edit > Edit Palette…) opens the palette editor: drag the color stops along the
+gradient, double-click to add one, Delete to remove it. The picture follows every change. Your palettes are kept
+with your settings, and a saved location carries its palette along.
+
+![Orbit traps, a ball with bloom, and the palette editor](docs/effects.png)
 
 ## Autopilot
 
@@ -64,7 +84,8 @@ of empty views. Drag to steer it. **❚❚ Pause** (or Space) holds it where it 
 **Record Zoom…** renders a dive from the whole set into the current view as an MP4 video, an animated WebP, an
 animated GIF or PNG frames, at any size up to 4K (8K and more as frames). **Seamless Loop** finds a mini Mandelbrot inside the
 view and zooms along the exact path into it. The mini copy looks like the whole set, the colors are matched at
-both ends and the wrap is blended, so the movie repeats forever.
+both ends and the wrap is blended, so the movie repeats forever. Movies are made from keyframes (two per halving
+of the view, each a little larger and finer than a frame), so they render several times faster than frame by frame.
 
 <br clear="right">
 
@@ -82,7 +103,7 @@ drawn in pieces, so memory is never the limit.
   Data Folder…, Reset Settings to Defaults…), Quit
 - **Explore:** Back, Forward, Reset View, Zoom In, Zoom Out, Turn Left, Turn Right, Straighten, Add to Places…,
   Randomize Everything, Randomize Colors, Autopilot, Pause Animation, Autopilot Speed, Record Zoom…
-- **Edit:** Undo, Redo, Reset Colors to Defaults, Reset Everything to Defaults
+- **Edit:** Undo, Redo, Reset Colors to Defaults, Reset Everything to Defaults, Edit Palette…, Delete This Palette
 - **View:** Theme, Window Opacity, Julia Preview, Anti-Aliasing, Zoom Speed, Always on Top, Full Screen, Reset View
   Options
 - **Help:** Mouse and Keys, Project Website, Open App Data Folder, Report a Problem, About
