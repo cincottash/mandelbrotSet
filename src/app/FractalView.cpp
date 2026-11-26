@@ -187,8 +187,10 @@ void FractalView::applyZoom(double u, double v, double factor)
         const core::FloatExp target = m_view.scale * core::FloatExp(1.0 / factor);
         if (target < m_core->minimumScale()) {
             m_zoomPending = 0;
-            emit zoomLimitReached(QStringLiteral("Power %1 can zoom to about 1e-24. Power 2 can zoom without limit.")
-                                      .arg(m_fractal.power));
+            emit zoomLimitReached(m_fractal.classic()
+                                      ? QStringLiteral("Power %1 can zoom to about 1e-24. Power 2 can zoom without limit.").arg(m_fractal.power)
+                                      : QStringLiteral("The %1 can zoom to about 1e-24. The classic formula at power 2 can zoom without limit.")
+                                            .arg(core::formulaNames().value(int(m_fractal.formula))));
             return;
         }
     }
@@ -634,8 +636,9 @@ void FractalView::autopilotAdvance(double dt, qint64 now)
     const double factor = std::exp(rate * dt);
     if (factor > 1.0 && m_view.scale * core::FloatExp(1.0 / factor) < m_core->minimumScale()) {
         setAutopilot(false);
-        emit zoomLimitReached(QStringLiteral("The autopilot stopped at the deepest zoom power %1 allows (about 1e-24).")
-                                  .arg(m_fractal.power));
+        emit zoomLimitReached(QStringLiteral("The autopilot stopped at the deepest zoom %1 allows (about 1e-24).")
+                                  .arg(m_fractal.classic() ? QStringLiteral("power %1").arg(m_fractal.power)
+                                                           : QStringLiteral("the ") + core::formulaNames().value(int(m_fractal.formula))));
         return;
     }
     m_view.zoomAt(0, 0, factor);

@@ -194,11 +194,11 @@ int main(int argc, char* argv[])
         rs.samplesPerSide = std::clamp(cli.value(aa).toInt(), 1, 4);
         const QString o = cli.value(out);
         rs.format = MovieWriter::fromPath(o);
-        rs.from = core::View::home(loc.fractal.julia());
+        rs.from = loc.fractal.home();
         rs.to = loc.view;
         if (cli.isSet(loop)) {
-            if (loc.fractal.julia() || loc.fractal.power != 2) {
-                say(QStringLiteral("Loops need the Mandelbrot set at power 2."));
+            if (loc.fractal.julia() || !loc.fractal.deepCapable()) {
+                say(QStringLiteral("Loops need the classic Mandelbrot set at power 2."));
                 return 2;
             }
             say(QStringLiteral("Looking for a mini Mandelbrot..."));   // plain dots: consoles show any code page

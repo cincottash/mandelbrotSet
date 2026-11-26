@@ -23,27 +23,34 @@ QColor randomColor(QRandomGenerator& r, int minValue = 0, int maxValue = 255)
     return QColor::fromHsv(r.bounded(360), r.bounded(40, 256), r.bounded(minValue, maxValue + 1));
 }
 
+// One step of the formula, in double precision.
+std::complex<double> step(std::complex<double> z, std::complex<double> c, const FractalParams& f)
+{
+    if (f.formula == Formula::BurningShip)
+        return {z.real() * z.real() - z.imag() * z.imag() + c.real(), 2 * std::abs(z.real() * z.imag()) - c.imag()};
+    std::complex<double> w = z;
+    for (int k = 1; k < f.power; ++k) w *= z;
+    if (f.formula == Formula::Tricorn) w = std::conj(w);
+    return w + c;
+}
+
 // Escape time of one point in double precision (good to about 1e-12): -1 when it stays inside.
-int escapeTime(std::complex<double> z, std::complex<double> c, int power, int maxIt)
+int escapeTime(std::complex<double> z, std::complex<double> c, const FractalParams& f, int maxIt)
 {
     for (int n = 0; n < maxIt; ++n) {
         if (std::norm(z) > 64.0) return n;
-        std::complex<double> w = z;
-        for (int k = 1; k < power; ++k) w *= z;
-        z = w + c;
+        z = step(z, c, f);
     }
     return -1;
 }
 
 // The smooth escape time (mu) of one point: -1 when it stays inside.
-double smoothEscape(std::complex<double> z, std::complex<double> c, int power, int maxIt)
+double smoothEscape(std::complex<double> z, std::complex<double> c, const FractalParams& f, int maxIt)
 {
     for (int n = 0; n < maxIt; ++n) {
         const double r2 = std::norm(z);
-        if (r2 > 1e6) return n + 1 - std::log(std::log(r2) / (2 * std::log(1e3))) / std::log(double(power));
-        std::complex<double> w = z;
-        for (int k = 1; k < power; ++k) w *= z;
-        z = w + c;
+        if (r2 > 1e6) return n + 1 - std::log(std::log(r2) / (2 * std::log(1e3))) / std::log(double(f.power));
+        z = step(z, c, f);
     }
     return -1;
 }
@@ -60,7 +67,7 @@ Sampled sample(const FractalParams& f, std::complex<double> center, double scale
     double sum = 0, sum2 = 0;
     for (int i = 0; i < count; ++i) {
         const std::complex<double> p = center + std::complex<double>(uniform(r, -1.6, 1.6), uniform(r, -1.0, 1.0)) * scale;
-        const int n = f.julia() ? escapeTime(p, seed, f.power, maxIt) : escapeTime(0.0, p, f.power, maxIt);
+        const int n = f.julia() ? escapeTime(p, seed, f, maxIt) : escapeTime(0.0, p, f, maxIt);
         if (points) points->push_back({p, n});
         if (n >= 0) {
             ++escaped;
@@ -80,7 +87,8 @@ Sampled sample(const FractalParams& f, std::complex<double> center, double scale
 bool dive(const FractalParams& f, std::complex<double> seed, int steps, QRandomGenerator& r, std::complex<double>* center,
           double* scale)
 {
-    std::complex<double> c = f.julia() ? 0.0 : std::complex<double>(-0.6, 0.0);
+    const View home = f.home();
+    std::complex<double> c(home.cx.toDouble(), home.cy.toDouble());
     double s = 1.25;
     for (int step = 0; step < steps; ++step) {
         std::vector<std::pair<std::complex<double>, int>> pts;
@@ -113,7 +121,7 @@ double busyShare(const FractalParams& f, std::complex<double> center, double sca
         for (int x = 0; x < gw; ++x) {
             const std::complex<double> uv((x + 0.5) / gw * 3.2 - 1.6, (y + 0.5) / gh * 2.0 - 1.0);
             const std::complex<double> p = center + uv * rot * scale;
-            const int n = f.julia() ? escapeTime(p, seed, f.power, maxIt) : escapeTime(0.0, p, f.power, maxIt);
+            const int n = f.julia() ? escapeTime(p, seed, f, maxIt) : escapeTime(0.0, p, f, maxIt);
             v[size_t(y * gw + x)] = n < 0 ? -1.0 : std::log(1.0 + n);
         }
     int busy = 0, pairs = 0;
@@ -137,8 +145,8 @@ void muPerPixel(const FractalParams& f, std::complex<double> center, double scal
     for (int i = 0; i < 400; ++i) {
         const std::complex<double> p = center + std::complex<double>(uniform(r, -1.6, 1.6), uniform(r, -1.0, 1.0)) * scale;
         const std::complex<double> q = p + std::polar(px, uniform(r, 0.0, 2 * std::numbers::pi));
-        const double a = f.julia() ? smoothEscape(p, seed, f.power, 6000) : smoothEscape(0.0, p, f.power, 6000);
-        const double b = f.julia() ? smoothEscape(q, seed, f.power, 6000) : smoothEscape(0.0, q, f.power, 6000);
+        const double a = f.julia() ? smoothEscape(p, seed, f, 6000) : smoothEscape(0.0, p, f, 6000);
+        const double b = f.julia() ? smoothEscape(q, seed, f, 6000) : smoothEscape(0.0, q, f, 6000);
         if (a < 0 || b < 0) continue;
         mus.push_back(a);
         steps.push_back(std::abs(a - b));
@@ -299,19 +307,27 @@ Scene randomScene(QRandomGenerator& rnd)
     for (int attempt = 0; attempt < 16; ++attempt) {
         Scene s;
         const double kind = rnd.generateDouble();
-        if (kind < 0.5) {
+        if (kind < 0.4) {
             s.fractal.type = FractalType::Mandelbrot;
-        } else if (kind < 0.8) {
+        } else if (kind < 0.68) {
             s.fractal.type = FractalType::Julia;
-        } else {
+            if (chance(rnd, 0.25)) s.fractal.formula = chance(rnd, 0.5) ? Formula::BurningShip : Formula::Tricorn;
+        } else if (kind < 0.8) {
             s.fractal.type = FractalType::Mandelbrot;
             s.fractal.power = rnd.bounded(3, 7);
+        } else if (kind < 0.9) {
+            s.fractal.formula = Formula::BurningShip;
+        } else {
+            s.fractal.formula = Formula::Tricorn;
+            if (chance(rnd, 0.3)) s.fractal.power = rnd.bounded(3, 6);
         }
         s.fractal.escapeRadius = chance(rnd, 0.12) ? uniform(rnd, 2.0, 6.0) : 256.0;
         std::complex<double> seed = 0;
         if (s.fractal.julia()) {
-            // Seeds near the Mandelbrot set's edge give the most intricate Julia sets.
+            // Seeds near the edge of the formula's Mandelbrot-like set give the most intricate Julia sets.
             FractalParams m;
+            m.formula = s.fractal.formula;
+            m.power = s.fractal.power;
             std::complex<double> c;
             double sc = 1.25;
             if (!dive(m, 0.0, rnd.bounded(1, 4), rnd, &c, &sc)) continue;

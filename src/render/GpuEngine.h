@@ -29,6 +29,7 @@ struct PassParams {
     double escapeRadius = 256;
     bool julia = false;
     int power = 2;
+    int formula = 0;              // core::Formula
     bool stripes = false;
     double stripeDensity = 5;
     bool wideRange = false;       // the extended-range shader (deep zooms)

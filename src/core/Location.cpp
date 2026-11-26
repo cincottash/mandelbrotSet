@@ -95,7 +95,7 @@ bool Location::load(const QString& path, QString* error)
 QList<Location> builtInPlaces()
 {
     struct P { const char* name; const char* re; const char* im; const char* scale; double angle; bool julia;
-               const char* jre; const char* jim; };
+               const char* jre; const char* jim; Formula formula = Formula::Classic; };
     static const P list[] = {
         {"Whole Set", "-0.6", "0", "1.25", 0, false, "", ""},
         {"Seahorse Valley", "-0.7435", "0.1314", "0.004", 0, false, "", ""},
@@ -114,6 +114,10 @@ QList<Location> builtInPlaces()
         {"Julia: San Marco", "0", "0", "1.25", 0, true, "-0.75", "0"},
         {"Julia: Dendrite", "0", "0", "1.25", 0, true, "0", "1"},
         {"Julia: Spirals", "0", "0", "1.25", 0, true, "0.285", "0.01"},
+        {"Burning Ship", "-0.45", "0.5", "1.25", 0, false, "", "", Formula::BurningShip},
+        {"Burning Ship: The Ship", "-1.762", "0.034", "0.045", 0, false, "", "", Formula::BurningShip},
+        {"Burning Ship: Julia", "0", "0", "1.25", 0, true, "-1.755", "0.03", Formula::BurningShip},
+        {"Tricorn", "-0.2", "0", "1.25", 0, false, "", "", Formula::Tricorn},
     };
     QList<Location> out;
     for (const P& p : list) {
@@ -127,6 +131,7 @@ QList<Location> builtInPlaces()
         QString err;
         l.view.fromJson(v, &err);
         l.fractal.type = p.julia ? FractalType::Julia : FractalType::Mandelbrot;
+        l.fractal.formula = p.formula;
         if (p.julia) {
             l.fractal.juliaRe = QString::fromLatin1(p.jre);
             l.fractal.juliaIm = QString::fromLatin1(p.jim);

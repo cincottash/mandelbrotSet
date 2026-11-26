@@ -652,9 +652,21 @@ QWidget* MainWindow::buildFractalCard()
     m_type->addItems({QStringLiteral("Mandelbrot Set"), QStringLiteral("Julia Set")});
     m_type->setProperty("testId", QStringLiteral("type"));
     grid->addWidget(m_type, r++, 1, 1, 2);
+    grid->addWidget(new QLabel(QStringLiteral("Formula")), r, 0);
+    m_formula = new QComboBox;
+    m_formula->addItems(core::formulaNames());
+    m_formula->setProperty("testId", QStringLiteral("formula"));
+    m_formula->setItemData(0, QStringLiteral("z^power + c: the Mandelbrot set itself."), Qt::ToolTipRole);
+    m_formula->setItemData(1, QStringLiteral("(|x| + i|y|)^2 + c: folds each step into one quarter of the plane. "
+                                             "Shows a burning ship, with fleets of smaller ships along its mast."), Qt::ToolTipRole);
+    m_formula->setItemData(2, QStringLiteral("conj(z)^power + c, the Mandelbar: three-cornered at power 2, more corners "
+                                             "above."), Qt::ToolTipRole);
+    m_formula->setToolTip(QStringLiteral("The rule that takes each point one step further. The Burning Ship and the Tricorn "
+                                         "zoom to about 1e-24."));
+    grid->addWidget(m_formula, r++, 1, 1, 2);
     m_power = new SliderRow(QStringLiteral("Power"), 2, 8, 2, 0, QString(), false,
                             QStringLiteral("The exponent in z^power + c. Power 2 is the classic set and zooms without limit; "
-                                           "higher powers zoom to about 1e-24."), this);
+                                           "higher powers zoom to about 1e-24. The Burning Ship is always power 2."), this);
     m_power->setTestId(QStringLiteral("power"));
     m_power->addTo(grid, r++);
     m_escape = new SliderRow(QStringLiteral("Escape Radius"), 2, 100000, 256, 0, QString(), true,
@@ -709,6 +721,10 @@ QWidget* MainWindow::buildFractalCard()
         if (m_syncing) return;
         if (i == 1) switchToJulia(m_fractal.juliaRe, m_fractal.juliaIm);
         else switchToMandelbrot();
+    });
+    connect(m_formula, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (m_syncing) return;
+        switchFormula(core::Formula(i));
     });
     connect(m_power, &SliderRow::valueChanged, this, [this](double v) {
         m_fractal.power = int(std::lround(v));
@@ -1103,6 +1119,8 @@ void MainWindow::syncControls()
     m_syncing = true;
     m_type->setCurrentIndex(m_fractal.julia() ? 1 : 0);
     m_power->setValue(m_fractal.power);
+    m_formula->setCurrentIndex(int(m_fractal.formula));
+    m_power->setEnabled(m_fractal.formula != core::Formula::BurningShip);
     m_escape->setValue(m_fractal.escapeRadius);
     m_autoIter->setChecked(m_fractal.autoIterations);
     m_iter->setEnabled(!m_fractal.autoIterations);
@@ -1162,6 +1180,17 @@ void MainWindow::updateStyleVisibility()
     m_in2Label->setVisible(two);
     m_seedBox->setVisible(m_fractal.julia());
     m_juliaHint->setVisible(!m_fractal.julia());
+    // Settings that only shape an effect wait, grayed, until the effect is on.
+    auto enable = [this](const char* key, bool on) {
+        if (SliderRow* r = m_rows.value(QString::fromLatin1(key))) r->setEnabled(on);
+    };
+    enable("edge_width", m_colors.edgeGlow > 0);
+    m_edgeColor->setEnabled(m_colors.edgeGlow > 0);
+    enable("bloom_size", m_colors.bloom > 0);
+    enable("bloom_threshold", m_colors.bloom > 0);
+    enable("sphere_shade", m_colors.sphereSize > 0);
+    enable("sphere_shine", m_colors.sphereSize > 0);
+    m_sphereBg->setEnabled(m_colors.sphereSize > 0);
 }
 
 void MainWindow::noteEdit()
@@ -1218,9 +1247,10 @@ void MainWindow::resetCard(const QString& title)
     finishEdit();   // a run of slider moves before this stays its own Undo step
     const core::ColorParams dc;
     if (title == QLatin1String("FRACTAL")) {
-        // The formula's numbers; the type (Mandelbrot or Julia) stays, so the view still fits.
+        // The formula's numbers; the type (Mandelbrot or Julia) and the formula stay, so the view still fits.
         core::FractalParams d;
         d.type = m_fractal.type;
+        d.formula = m_fractal.formula;
         m_fractal = d;
         syncControls();
         fractalEdited();
@@ -1299,6 +1329,7 @@ void MainWindow::colorsEdited()
         m_look->setCurrentIndex(m_look->findText(QStringLiteral("Custom")));
     }
     m_syncing = false;
+    updateStyleVisibility();
     saveSettingsSoon();
 }
 
@@ -1523,8 +1554,26 @@ void MainWindow::forward()
 
 void MainWindow::resetView()
 {
-    m_view->setView(core::View::home(m_fractal.julia()));
+    m_view->setView(m_fractal.home());
     rememberView();
+}
+
+void MainWindow::switchFormula(core::Formula f)
+{
+    if (f == m_fractal.formula) return;
+    finishEdit();
+    noteEdit();
+    m_fractal.formula = f;
+    if (f == core::Formula::BurningShip) m_fractal.power = 2;
+    syncControls();
+    m_view->setFractal(m_fractal);
+    finishEdit();
+    if (!m_fractal.julia()) {
+        m_view->setView(m_fractal.home());
+        rememberView();
+    }
+    log(QStringLiteral("Now %1.").arg(m_fractal.name()));
+    saveSettingsSoon();
 }
 
 void MainWindow::switchToJulia(const QString& re, const QString& im)
@@ -1700,14 +1749,15 @@ void MainWindow::setAutopilot(bool on)
 void MainWindow::recordZoom()
 {
     setAutopilot(false);
-    const bool canLoop = !m_fractal.julia() && m_fractal.power == 2;
+    const bool canLoop = !m_fractal.julia() && m_fractal.deepCapable();
     const QString why = m_fractal.julia()
         ? QStringLiteral("Loops need the Mandelbrot set: Julia sets have no mini copies of themselves.")
-        : QStringLiteral("Loops need power 2: the deep zoom into a mini copy only works there.");
+        : !m_fractal.classic() ? QStringLiteral("Loops need the classic formula: the search for a mini copy is written for it.")
+                               : QStringLiteral("Loops need power 2: the deep zoom into a mini copy only works there.");
     RecordDialog d(m_view->view(), canLoop, why, m_view->size() * m_view->devicePixelRatioF(), this);
     if (d.exec() != QDialog::Accepted) return;
     RecordSettings s = d.settings();
-    if (!s.loop) s.from = core::View::home(m_fractal.julia());
+    if (!s.loop) s.from = m_fractal.home();
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
     QString path;
     if (s.format == MovieWriter::Format::PngFrames) {
@@ -1897,13 +1947,8 @@ void MainWindow::randomizeEverything()
     l.hasColors = true;
     if (s.fractal.julia() && !m_fractal.julia()) m_lastMandelbrotView = m_view->view();
     applyLocation(l);
-    const QString what = s.fractal.julia()
-        ? QStringLiteral("the Julia set of %1 %2 %3i").arg(s.fractal.juliaRe.left(10),
-                                                          s.fractal.juliaIm.startsWith(QLatin1Char('-')) ? QStringLiteral("−") : QStringLiteral("+"),
-                                                          s.fractal.juliaIm.startsWith(QLatin1Char('-')) ? s.fractal.juliaIm.mid(1, 9) : s.fractal.juliaIm.left(9))
-        : s.fractal.power == 2 ? QStringLiteral("the Mandelbrot set") : QStringLiteral("the power %1 Mandelbrot set").arg(s.fractal.power);
     log(QStringLiteral("Random: %1 at zoom %2×, %3 with the %4 palette. Undo and Back return to the ones before.")
-            .arg(what, s.view.magnificationText(), core::styleNames().value(s.colors.style), s.colors.palette));
+            .arg(s.fractal.name(), s.view.magnificationText(), core::styleNames().value(s.colors.style), s.colors.palette));
 }
 
 // ------------------------------------------------------------------------------------------------ places

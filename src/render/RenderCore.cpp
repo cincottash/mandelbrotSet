@@ -25,7 +25,8 @@ bool sameView(const core::View& a, const core::View& b)
 bool samePassContent(const PassParams& a, const PassParams& b)
 {
     return sameView(a.view, b.view) && a.maxIterations == b.maxIterations && a.escapeRadius == b.escapeRadius
-        && a.julia == b.julia && a.power == b.power && a.stripes == b.stripes && a.stripeDensity == b.stripeDensity
+        && a.julia == b.julia && a.power == b.power && a.formula == b.formula && a.stripes == b.stripes
+        && a.stripeDensity == b.stripeDensity
         && a.wideRange == b.wideRange && a.useBla == b.useBla && a.boxing == b.boxing && a.shallowCheck == b.shallowCheck
         && a.offset.x == b.offset.x && a.offset.y == b.offset.y
         && a.offset.e == b.offset.e;
@@ -88,7 +89,7 @@ void RenderCore::setOutputSize(int w, int h)
 
 core::FloatExp RenderCore::minimumScale() const
 {
-    if (m_fractal.power != 2) return core::FloatExp(1.0, int64_t(kWideBelowLog2) + 1);
+    if (!m_fractal.deepCapable()) return core::FloatExp(1.0, int64_t(kWideBelowLog2) + 1);
     return core::FloatExp(1.0, -1'999'000);
 }
 
@@ -134,7 +135,7 @@ bool RenderCore::referenceWanted(const core::View& v, int maxIt, int w, int h, b
     // Far from the reference: the pixel offsets lose precision, so start again from the view's center.
     const core::FloatExp off = v.centerOffsetFrom(o.request.x, o.request.y).abs();
     if (off > v.scale * core::FloatExp(64.0)) return true;
-    if (m_fractal.power == 2 && m_useBla) {
+    if (m_fractal.deepCapable() && m_useBla) {
         const core::FloatExp need = dcMaxFor(v, o.request.x, o.request.y, w, h);
         if (!m_ref.bla || need > m_ref.bla->dcMax || m_ref.bla->dcMax > need * core::FloatExp(1024.0)) {
             *tableOnly = true;
@@ -168,6 +169,7 @@ void RenderCore::requestReference(const core::View& v, int maxIt, int w, int h, 
         rq.seedX = m_fractal.seedX(rq.precision);
         rq.seedY = m_fractal.seedY(rq.precision);
         rq.power = m_fractal.power;
+        rq.formula = int(m_fractal.formula);
         rq.maxIterations = maxIt;
         rq.escapeRadius = m_fractal.escapeRadius;
     }
@@ -197,7 +199,7 @@ void RenderCore::startWorker(Job job)
             orbit = o;
         }
         auto bla = std::make_shared<core::BlaTable>();
-        if (ok && job.request.power == 2) ok = core::buildBla(*orbit, job.dcMax, std::ldexp(1.0, -24), bla.get(), false, &m_cancel);
+        if (ok && job.request.power == 2 && job.request.formula == 0) ok = core::buildBla(*orbit, job.dcMax, std::ldexp(1.0, -24), bla.get(), false, &m_cancel);
         if (ok) {
             m_jobOrbit = orbit;
             m_jobBla = bla;
@@ -246,15 +248,17 @@ PassParams RenderCore::passParams(const core::View& v, int outW, int outH, int s
     p.escapeRadius = m_fractal.escapeRadius;
     p.julia = m_fractal.julia();
     p.power = m_fractal.power;
+    p.formula = int(m_fractal.formula);
     p.stripes = m_colors.style == int(core::ColorStyle::Stripes);
     p.stripeDensity = m_colors.stripeDensity;
     if (m_ref.orbit) p.offset = v.centerOffsetFrom(m_ref.orbit->request.x, m_ref.orbit->request.y);
-    p.wideRange = m_fractal.power == 2 && v.scale.log2Abs() < kWideBelowLog2;
-    p.useBla = m_useBla && m_ref.bla && m_ref.bla->valid() && m_fractal.power == 2;
+    p.wideRange = m_fractal.deepCapable() && v.scale.log2Abs() < kWideBelowLog2;
+    p.useBla = m_useBla && m_ref.bla && m_ref.bla->valid() && m_fractal.deepCapable();
     // Boxing fills enclosed inside pixels without their "Depth" value, so it is off for the colorings that show it.
-    // Cheap views (few iterations) don't gain from boxing's extra passes.
-    p.boxing = m_boxing && m_colors.interiorStyle != int(core::InteriorStyle::Depth) && maxIt >= 4096;
-    p.shallowCheck = m_boxing && m_colors.interiorStyle != int(core::InteriorStyle::Depth);
+    // Cheap views (few iterations) don't gain from boxing's extra passes. The Burning Ship and the Tricorn aren't
+    // polynomials of c, so their inside can have holes: no boxing there.
+    p.boxing = m_boxing && m_colors.interiorStyle != int(core::InteriorStyle::Depth) && maxIt >= 4096 && m_fractal.classic();
+    p.shallowCheck = m_boxing && m_colors.interiorStyle != int(core::InteriorStyle::Depth) && m_fractal.classic();
     if (p.useBla && m_ref.orbit) {
         const core::FloatExp need = dcMaxFor(v, m_ref.orbit->request.x, m_ref.orbit->request.y, outW, outH);
         if (need > m_ref.bla->dcMax) p.useBla = false;   // the table would give wrong results this far out
@@ -434,7 +438,7 @@ CoreStatus RenderCore::status() const
     s.referenceTarget = m_jobTarget;
     s.waiting = m_waiting;
     s.maxIterations = maxIterationsFor(m_view);
-    s.wideRange = m_fractal.power == 2 && m_view.scale.log2Abs() < kWideBelowLog2;
+    s.wideRange = m_fractal.deepCapable() && m_view.scale.log2Abs() < kWideBelowLog2;
     s.lastPassMs = m_lastFullMs;
     s.lastPassW = m_lastFullW;
     s.lastPassH = m_lastFullH;

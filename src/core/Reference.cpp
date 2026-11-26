@@ -74,13 +74,24 @@ bool computeOrbit(const OrbitRequest& rq, RefOrbit* out, const std::atomic<bool>
             if (cancel && cancel->load(std::memory_order_relaxed)) return false;
             if (progress) progress->store(n, std::memory_order_relaxed);
         }
-        if (rq.power == 2) {
+        if (rq.formula == 1) {
+            // Burning Ship: x' = x^2 - y^2 + cx, y' = 2|xy| - cy.
+            mpfr_sqr(t1.v, zx.v, MPFR_RNDN);
+            mpfr_sqr(t2.v, zy.v, MPFR_RNDN);
+            mpfr_mul(t3.v, zx.v, zy.v, MPFR_RNDN);
+            mpfr_abs(t3.v, t3.v, MPFR_RNDN);
+            mpfr_sub(zx.v, t1.v, t2.v, MPFR_RNDN);
+            mpfr_add(zx.v, zx.v, cx.v, MPFR_RNDN);
+            mpfr_mul_2ui(zy.v, t3.v, 1, MPFR_RNDN);
+            mpfr_sub(zy.v, zy.v, cy.v, MPFR_RNDN);
+        } else if (rq.power == 2) {
             mpfr_sqr(t1.v, zx.v, MPFR_RNDN);
             mpfr_sqr(t2.v, zy.v, MPFR_RNDN);
             mpfr_mul(t3.v, zx.v, zy.v, MPFR_RNDN);
             mpfr_sub(zx.v, t1.v, t2.v, MPFR_RNDN);
             mpfr_add(zx.v, zx.v, cx.v, MPFR_RNDN);
             mpfr_mul_2ui(zy.v, t3.v, 1, MPFR_RNDN);
+            if (rq.formula == 2) mpfr_neg(zy.v, zy.v, MPFR_RNDN);   // Tricorn: conj(z)^2 = conj(z^2)
             mpfr_add(zy.v, zy.v, cy.v, MPFR_RNDN);
         } else {
             mpfr_set(wx.v, zx.v, MPFR_RNDN);
@@ -94,6 +105,7 @@ bool computeOrbit(const OrbitRequest& rq, RefOrbit* out, const std::atomic<bool>
                 mpfr_add(wy.v, wy.v, t3.v, MPFR_RNDN);
                 mpfr_sub(wx.v, t1.v, t2.v, MPFR_RNDN);
             }
+            if (rq.formula == 2) mpfr_neg(wy.v, wy.v, MPFR_RNDN);   // Tricorn: conj(z)^p = conj(z^p)
             mpfr_add(zx.v, wx.v, cx.v, MPFR_RNDN);
             mpfr_add(zy.v, wy.v, cy.v, MPFR_RNDN);
         }
@@ -128,7 +140,7 @@ bool buildBla(const RefOrbit& orbit, const FloatExp& dcMax, double epsilon, BlaT
     BlaTable t;
     t.dcMax = dcMax;
     t.epsilon = epsilon;
-    if (orbit.request.power != 2 || orbit.length < 3) {
+    if (orbit.request.power != 2 || orbit.request.formula != 0 || orbit.length < 3) {
         *out = std::move(t);
         return true;
     }

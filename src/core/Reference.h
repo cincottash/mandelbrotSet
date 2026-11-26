@@ -27,6 +27,7 @@ struct OrbitRequest {
     BigFloat seedX{0.0, 128}, seedY{0.0, 128};   // Julia's c
     bool julia = false;
     int power = 2;
+    int formula = 0;                     // core::Formula
     int maxIterations = 1000;
     double escapeRadius = 256.0;
     long precision = 128;

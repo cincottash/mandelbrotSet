@@ -237,7 +237,7 @@ RecordSettings RecordDialog::settings() const
         s.from = core::View::home(false);
         s.to = core::minibrotHome(m_minibrot);
     } else {
-        s.from = core::View::home(false);
+        s.from = core::View::home(false);   // the caller puts the formula's own home here
         s.to = m_current;
     }
     return s;

@@ -329,8 +329,9 @@ void GpuEngine::bindPassUniforms()
     glUniform1i(loc("uRefLen"), m_refLen);
     glUniform1i(loc("uRefEscaped"), m_refEscaped ? 1 : 0);
     glUniform1i(loc("uPower"), p.power);
+    glUniform1i(loc("uFormula"), p.formula);
     glUniform1i(loc("uJulia"), p.julia ? 1 : 0);
-    const int levels = (p.useBla && p.power == 2) ? m_blaLevels : 0;
+    const int levels = (p.useBla && p.power == 2 && p.formula == 0) ? m_blaLevels : 0;
     glUniform1i(loc("uBlaLevels"), levels);
     if (levels > 0) {
         glUniform1iv(loc("uBlaOffset"), levels, m_blaOffset.data());
@@ -340,7 +341,8 @@ void GpuEngine::bindPassUniforms()
     glUniform1f(loc("uStripeDensity"), float(p.stripeDensity));
     // Shallow Mandelbrot views (power 2) skip the main cardioid and the period-2 disk: single precision tells them
     // apart from the edge only while a pixel is far larger than its rounding.
-    const bool shallow = !p.julia && p.power == 2 && !p.wideRange && p.shallowCheck && p.view.scale.log2Abs() > -10.0;
+    const bool shallow = !p.julia && p.power == 2 && p.formula == 0 && !p.wideRange && p.shallowCheck
+                         && p.view.scale.log2Abs() > -10.0;
     glUniform1i(loc("uShallowCheck"), shallow ? 1 : 0);
     glUniform2f(loc("uRefC"), float(m_refC.x()), float(m_refC.y()));
 }

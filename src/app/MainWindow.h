@@ -137,6 +137,7 @@ private:
     void showViewMenu(const QPoint& global, const QString& re, const QString& im);
     void switchToJulia(const QString& re, const QString& im);
     void switchToMandelbrot();
+    void switchFormula(core::Formula f);
 
     void loadPlaces();
     void savePlaces();
@@ -167,6 +168,7 @@ private:
 
     // FRACTAL
     QComboBox* m_type = nullptr;
+    QComboBox* m_formula = nullptr;
     SliderRow* m_power = nullptr;
     SliderRow* m_escape = nullptr;
     QCheckBox* m_autoIter = nullptr;
