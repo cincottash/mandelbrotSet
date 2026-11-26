@@ -89,6 +89,10 @@ public:
     void finishPaletteEdit(bool save, const core::Palette& p);
     void deleteCustomPalette(const QString& name);
     QStringList paletteChoices() const;   // the palette list's entries, in order
+    // The Gallery: famous fractals in their own looks (the card, and Explore > Gallery).
+    void showGalleryItem(int i);
+    int galleryCount() const { return int(m_gallery.size()); }
+    QImage galleryThumbnail(int i) const { return i >= 0 && i < m_gallery.size() ? m_gallery[i].thumbnail : QImage(); }
     bool placeButtonsEnabled(bool* go, bool* rename, bool* remove) const;
 
 protected:
@@ -223,6 +227,9 @@ private:
     QPushButton* m_renamePlace = nullptr;
     QPushButton* m_removePlace = nullptr;
     QList<core::Location> m_placeList;   // built-in first, then the user's
+    // GALLERY
+    QListWidget* m_galleryList = nullptr;
+    QList<core::Location> m_gallery;
     // ACTIVITY
     QPlainTextEdit* m_log = nullptr;
     // Bottom bar

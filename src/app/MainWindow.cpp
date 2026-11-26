@@ -274,6 +274,12 @@ void MainWindow::buildMenus()
         m_view->rotateBy(-v.angle * 180.0 / M_PI);
     });
     explore->addSeparator();
+    QMenu* gallery = explore->addMenu(QStringLiteral("Gallery"));
+    {
+        const QList<core::Location> items = core::galleryPlaces();
+        for (int i = 0; i < items.size(); ++i)
+            gallery->addAction(items[i].name, this, [this, i] { showGalleryItem(i); });
+    }
     explore->addAction(QStringLiteral("Add to Places…"), QKeySequence(QStringLiteral("Ctrl+D")), this, &MainWindow::addPlace);
     explore->addAction(QStringLiteral("Randomize Everything"), QKeySequence(QStringLiteral("Ctrl+R")), this, &MainWindow::randomizeEverything);
     explore->addAction(QStringLiteral("Randomize Colors"), QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, &MainWindow::randomizeColors);
@@ -1071,6 +1077,36 @@ void MainWindow::buildUi()
             m_colors.sphereBackground = c;
             colorsEdited();
         });
+    }
+    {
+        // GALLERY: famous fractals, each in its own look, one click away.
+        QVBoxLayout* b = nullptr;
+        m_leftCol->addWidget(makeCard(QStringLiteral("GALLERY"), &b));
+        m_gallery = core::galleryPlaces();
+        m_galleryList = new QListWidget;
+        m_galleryList->setProperty("testId", QStringLiteral("gallery"));
+        m_galleryList->setViewMode(QListView::IconMode);
+        m_galleryList->setMovement(QListView::Static);
+        m_galleryList->setResizeMode(QListView::Adjust);
+        m_galleryList->setWrapping(true);
+        m_galleryList->setIconSize(QSize(144, 90));
+        m_galleryList->setGridSize(QSize(158, 122));
+        m_galleryList->setUniformItemSizes(true);
+        m_galleryList->setWordWrap(true);
+        m_galleryList->setMinimumHeight(260);
+        m_galleryList->setToolTip(QStringLiteral("Famous fractals, each in its own colors. Click one to see it; "
+                                                 "Undo brings your colors back."));
+        for (const core::Location& l : m_gallery) {
+            auto* it = new QListWidgetItem(l.name);
+            QPixmap blank(144, 90);
+            blank.fill(QColor(0x20, 0x22, 0x28));
+            it->setIcon(QIcon(blank));
+            it->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
+            m_galleryList->addItem(it);
+        }
+        b->addWidget(m_galleryList);
+        connect(m_galleryList, &QListWidget::itemClicked, this,
+                [this](QListWidgetItem* it) { showGalleryItem(m_galleryList->row(it)); });
     }
     {
         QVBoxLayout* b = nullptr;
@@ -2350,10 +2386,30 @@ void MainWindow::goToPlace(int row)
     log(QStringLiteral("Went to \"%1\" (zoom %2×).").arg(l.name, l.view.magnificationText()));
 }
 
+void MainWindow::showGalleryItem(int i)
+{
+    if (i < 0 || i >= m_gallery.size()) return;
+    setAutopilot(false);
+    const core::Location& l = m_gallery[i];
+    if (m_fractal.type == core::FractalType::Mandelbrot && l.fractal.type != core::FractalType::Mandelbrot)
+        m_lastMandelbrotView = m_view->view();
+    applyLocation(l);
+    log(QStringLiteral("Gallery: %1. Undo (Ctrl+Z) brings your colors back.").arg(l.name));
+}
+
 void MainWindow::renderBuiltInThumbnails()
 {
-    // One thumbnail per idle moment, so the window never waits for them.
+    // One thumbnail per idle moment, so the window never waits for them. The Gallery's first, in their own colors.
     if (!m_view->gpuReady()) return;
+    for (int i = 0; i < m_gallery.size(); ++i) {
+        core::Location& l = m_gallery[i];
+        if (!l.thumbnail.isNull()) continue;
+        const QImage img = m_view->renderThumbnail(l.fractal, l.colors, l.view, 288, 180);
+        l.thumbnail = img.isNull() ? QImage(288, 180, QImage::Format_RGB32) : img;
+        if (QListWidgetItem* it = m_galleryList->item(i)) it->setIcon(QIcon(QPixmap::fromImage(l.thumbnail)));
+        QTimer::singleShot(60, this, [this] { renderBuiltInThumbnails(); });
+        return;
+    }
     for (core::Location& l : m_placeList) {
         if (!l.builtIn || !l.thumbnail.isNull()) continue;
         // Thumbnails use the colors in use, at the list's shape, on the preview's own renderer (the main view keeps

@@ -50,7 +50,10 @@ the others go to about 10⁻²⁴.
 ![The Burning Ship, the Tricorn, Julia sets and the Nebulabrot](docs/fractals.png)
 
 The status line shows the center, the zoom, the iteration limit and how long the picture took. Back and Forward
-step through the views you visited. **Places** holds famous spots to start from and the ones you save.
+step through the views you visited. The **Gallery** (also Explore > Gallery) shows 18 famous fractals, each in its
+own colors: the Nebulabrot and the Buddhabrot, Seahorse and Elephant Valley, the Burning Ship, the Tricorn, the
+Douady Rabbit and other Julia sets, Pickover stalks, a Julia sphere and more. **Places** holds famous spots to
+start from (in the colors in use) and the ones you save.
 
 ## Colors
 

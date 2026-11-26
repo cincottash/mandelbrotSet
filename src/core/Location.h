@@ -29,7 +29,9 @@ struct Location {
     bool load(const QString& path, QString* error);
 };
 
-// Famous places to start from.
+// Famous places to start from (they keep the colors in use).
 QList<Location> builtInPlaces();
+// The Gallery: famous fractals, each with its own look (they bring their colors along).
+QList<Location> galleryPlaces();
 
 }  // namespace core
