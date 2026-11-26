@@ -1,0 +1,435 @@
+// Iterates every pixel of one tile as an offset from the reference orbit (perturbation), skipping ahead with the
+// bilinear approximation table where it is valid, and writes the raw results the coloring pass reads.
+// "#version 430 core" and the tier define (TIER_X for zooms past single precision) are prepended by the program.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(rgba32f, binding = 0) uniform writeonly image2D uOut0;   // mu (-1 inside), distance (px), normal.xy
+layout(rgba32f, binding = 1) uniform writeonly image2D uOut1;   // |z| when it first passed 2, angle, stripes, inside value
+
+layout(std430, binding = 0) readonly buffer RefF { vec4 refF[]; };   // Z as a high part (xy) and a low part (zw)
+struct RefXEntry { vec4 m; ivec4 e; };                                // (high xy, low zw) * 2^e.x
+layout(std430, binding = 1) readonly buffer RefX { RefXEntry refX[]; };
+struct BlaFEntry { vec4 ab; vec4 r; };
+layout(std430, binding = 2) readonly buffer BlaF { BlaFEntry blaF[]; };
+struct BlaXEntry { vec4 ab; ivec2 e; float log2R; float pad; };
+layout(std430, binding = 3) readonly buffer BlaX { BlaXEntry blaX[]; };
+layout(std430, binding = 4) buffer Stats {
+    uint maxN; uint maxIdx; uint glitches; uint nearMax; uint escaped; uint maxEscN; uint inside; uint unfinished;
+} stats;
+// A pixel that needs more iterations than one dispatch may run saves where it is here and goes on in the next
+// dispatch, so no single dispatch runs long enough for the graphics driver to reset (Windows allows about 2 s).
+// Five vec4 per pixel of the tile.
+layout(std430, binding = 5) buffer State { vec4 st[]; };
+
+uniform ivec2 uOrigin;
+uniform ivec2 uTileSize;
+uniform ivec2 uSize;
+uniform float uInvHalfH;
+uniform float uHalfH;
+uniform vec2 uRot;
+uniform vec2 uJitter;
+uniform float uScaleM;
+uniform int uScaleE;
+uniform vec2 uOffM;
+uniform int uOffE;
+uniform int uMaxIter;
+uniform float uBailout2;
+uniform float uLogBailout;
+uniform int uRefLen;
+uniform bool uRefEscaped;
+uniform int uPower;
+uniform bool uJulia;
+uniform int uBlaLevels;
+uniform int uBlaOffset[32];
+uniform int uBlaCount[32];
+uniform bool uStripe;
+uniform float uStripeDensity;
+uniform int uIterBudget;      // iterations a pixel may run in this dispatch
+uniform bool uResume;         // go on from the saved state (a later dispatch of the same tile)
+
+const int ZERO_E = -1000000000;
+const float BIG = 1.0e30;
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+// x * 2^e for any e, without the undefined results ldexp gives outside -126..127.
+float ldx(float x, int e)
+{
+    e = clamp(e, -252, 252);
+    int h = e / 2;
+    return ldexp(ldexp(x, h), e - h);
+}
+vec2 ldx(vec2 x, int e)
+{
+    e = clamp(e, -252, 252);
+    int h = e / 2;
+    return ldexp(ldexp(x, ivec2(h)), ivec2(e - h));
+}
+float infNorm(vec2 v) { return max(abs(v.x), abs(v.y)); }
+
+// Complex numbers with their own power-of-two exponent: m * 2^e, max(|m.x|, |m.y|) in [0.5, 1).
+struct FC { vec2 m; int e; };
+FC fcZero() { return FC(vec2(0.0), ZERO_E); }
+bool fcIsZero(FC a) { return a.e == ZERO_E; }
+FC fcNorm(vec2 m, int e)
+{
+    float mx = infNorm(m);
+    if (mx == 0.0 || e == ZERO_E) return fcZero();
+    int k;
+    frexp(mx, k);
+    return FC(ldx(m, -k), e + k);
+}
+FC fcMul(FC a, FC b)
+{
+    if (fcIsZero(a) || fcIsZero(b)) return fcZero();
+    return fcNorm(cmul(a.m, b.m), a.e + b.e);
+}
+FC fcAdd(FC a, FC b)
+{
+    if (fcIsZero(a)) return b;
+    if (fcIsZero(b)) return a;
+    int d = a.e - b.e;
+    if (d > 60) return a;
+    if (d < -60) return b;
+    if (d >= 0) return fcNorm(a.m + ldx(b.m, -d), a.e);
+    return fcNorm(ldx(a.m, d) + b.m, b.e);
+}
+vec2 fcToVec(FC a) { return fcIsZero(a) ? vec2(0.0) : ldx(a.m, a.e); }
+float fcLog2(FC a) { return fcIsZero(a) ? -BIG : 0.5 * log2(dot(a.m, a.m)) + float(a.e); }
+FC refXv(int i)
+{
+    RefXEntry r = refX[i];
+    return (r.e.x <= -(1 << 29)) ? fcZero() : FC(r.m.xy, r.e.x);
+}
+vec2 refXf(int i)
+{
+    RefXEntry r = refX[i];
+    return ldx(r.m.xy, r.e.x);
+}
+
+// A rebase replaces dz by the whole z = Z + dz (it is near zero, closer than the reference). Z's low part is added
+// after the cancelling sum, so the small result keeps its digits.
+vec2 rebaseF(int i, vec2 dz)
+{
+    vec4 R = refF[i];
+    return (R.xy + dz) + R.zw;
+}
+FC rebaseX(int i, FC dz)
+{
+    RefXEntry r = refX[i];
+    if (r.e.x <= -(1 << 29)) return dz;
+    return fcAdd(fcAdd(FC(r.m.xy, r.e.x), dz), fcNorm(r.m.zw, r.e.x));
+}
+vec2 rebaseXF(int i, vec2 dz)
+{
+    RefXEntry r = refX[i];
+    return (ldx(r.m.xy, r.e.x) + dz) + ldx(r.m.zw, r.e.x);
+}
+
+shared uint sMaxN, sMaxIdx, sGlitch, sNear, sEsc, sMaxEsc, sInside;
+
+float binom(int nn, int k)
+{
+    float r = 1.0;
+    for (int i = 1; i <= k; ++i) r = r * float(nn - k + i) / float(i);
+    return r;
+}
+
+void main()
+{
+    if (gl_LocalInvocationIndex == 0u) {
+        sMaxN = 0u; sMaxIdx = 0u; sGlitch = 0u; sNear = 0u; sEsc = 0u; sMaxEsc = 0u; sInside = 0u;
+    }
+    barrier();
+
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 p = uOrigin + local;
+    bool inTile = local.x < uTileSize.x && local.y < uTileSize.y && p.x < uSize.x && p.y < uSize.y;
+
+    int n = 0;
+    bool glitch = false;
+    bool inside = true;
+    float r2 = 0.0;
+    vec2 z = vec2(0.0);
+    vec2 Dm = vec2(0.0);
+    int De = uScaleE;
+    float firstR = 0.0;
+    float minR2 = BIG;
+    float stripe = 0.0, stripePrev = 0.0;
+    int stripeCount = 0;
+    bool finished = true;   // false: the budget ran out first; the state is saved for the next dispatch
+    bool skip = false;      // finished in an earlier dispatch of this tile: nothing to do
+    const int si = (local.y * uTileSize.x + local.x) * 5;
+
+    if (inTile) {
+        vec2 q =(vec2(p) + 0.5 + uJitter - 0.5 * vec2(uSize)) * uInvHalfH;
+        q.y = -q.y;
+        vec2 qr = vec2(q.x * uRot.x - q.y * uRot.y, q.x * uRot.y + q.y * uRot.x);
+        // The derivative is kept as Dm * 2^De; dc/dq = rotation * scale.
+        vec2 Dadd = uRot * uScaleM;
+        if (uJulia) Dm = Dadd;
+        int m = 0;
+        int p1 = uPower - 1;
+
+#ifdef TIER_X
+        FC dcX = fcAdd(FC(uOffM, uOffE), fcMul(fcNorm(qr, 0), FC(vec2(uScaleM, 0.0), uScaleE)));
+        FC dzX = uJulia ? dcX : fcZero();
+        FC cX = uJulia ? fcZero() : dcX;
+        vec2 cF = fcToVec(cX);
+        vec2 dzF = vec2(0.0);
+        bool wide = true;   // dz is held with its own exponent while it is too small for a plain float
+        FC zX = fcAdd(refXv(0), dzX);
+        z = fcToVec(zX);
+#else
+        vec2 dc = ldx(uOffM, uOffE) + qr * ldx(uScaleM, uScaleE);
+        vec2 dz = uJulia ? dc : vec2(0.0);
+        vec2 c = uJulia ? vec2(0.0) : dc;
+        z = refF[0].xy + dz;
+#endif
+        r2 = dot(z, z);
+
+        if (uResume) {
+            const int flags = floatBitsToInt(st[si + 3].w);
+            if ((flags & 2) != 0) skip = true;
+            vec4 s0 = st[si], s1 = st[si + 1], s2 = st[si + 2], s3 = st[si + 3];
+            Dm = s0.zw;
+            z = s1.xy;
+            firstR = s1.z;
+            minR2 = s1.w;
+            stripe = s2.x;
+            stripePrev = s2.y;
+            stripeCount = floatBitsToInt(s2.z);
+            r2 = s2.w;
+            m = floatBitsToInt(s3.x);
+            n = floatBitsToInt(s3.y);
+            De = floatBitsToInt(s3.z);
+            glitch = (flags & 1) != 0;
+#ifdef TIER_X
+            dzF = s0.xy;
+            vec4 s4 = st[si + 4];
+            dzX = FC(s4.xy, floatBitsToInt(s4.z));
+            wide = floatBitsToInt(s4.w) != 0;
+#else
+            dz = s0.xy;
+#endif
+        }
+        const int nStop = skip ? n : min(uMaxIter, n + uIterBudget);
+
+        while (n < nStop) {
+            // 1. Skip ahead with the table while the offset is small enough.
+            if (uBlaLevels > 0 && m > 0 && ((m - 1) & 1) == 0) {
+                int base = m - 1;
+                int kTop = base == 0 ? uBlaLevels : min(findLSB(base), uBlaLevels);
+                int found = 0;
+#ifdef TIER_X
+                float ldz = wide ? fcLog2(dzX) : log2(max(length(dzF), 1.0e-38));
+                for (int k = 1; k <= kTop; ++k) {
+                    int j = base >> k;
+                    if (j >= uBlaCount[k - 1] || n + (1 << k) > uMaxIter) break;
+                    if (!(ldz < blaX[uBlaOffset[k - 1] + j].log2R)) break;
+                    found = k;
+                }
+                if (found > 0) {
+                    BlaXEntry b = blaX[uBlaOffset[found - 1] + (base >> found)];
+                    FC A = (b.e.x <= -(1 << 29)) ? fcZero() : FC(b.ab.xy, b.e.x);
+                    FC B = (b.e.y <= -(1 << 29)) ? fcZero() : FC(b.ab.zw, b.e.y);
+                    if (!wide) { dzX = fcNorm(dzF, 0); wide = true; }
+                    dzX = fcAdd(fcMul(A, dzX), fcMul(B, cX));
+                    // D' = A D + B dc/dq
+                    if (!fcIsZero(A)) {
+                        vec2 dm = cmul(A.m, Dm);
+                        int ne = De + A.e;
+                        if (!uJulia && !fcIsZero(B)) dm += ldx(cmul(B.m, Dadd), B.e + uScaleE - ne);
+                        Dm = dm;
+                        De = ne;
+                    } else {
+                        Dm = (uJulia || fcIsZero(B)) ? vec2(0.0) : cmul(B.m, Dadd);
+                        De = B.e + uScaleE;
+                    }
+                    int len = 1 << found;
+                    m += len;
+                    n += len;
+                    zX = fcAdd(refXv(m), dzX);
+                    z = fcToVec(zX);
+                    r2 = dot(z, z);
+                    if (r2 > uBailout2) { inside = false; break; }
+                    minR2 = min(minR2, r2);
+                    if (fcLog2(zX) < fcLog2(dzX) || m >= uRefLen) {
+                        if (m >= uRefLen && uRefEscaped) glitch = true;
+                        dzX = rebaseX(m, dzX);
+                        m = 0;
+                    }
+                    if (dzX.e > -50) { dzF = fcToVec(dzX); wide = false; }
+                    continue;
+                }
+#else
+                float dzi = infNorm(dz);
+                for (int k = 1; k <= kTop; ++k) {
+                    int j = base >> k;
+                    if (j >= uBlaCount[k - 1] || n + (1 << k) > uMaxIter) break;
+                    if (!(dzi < blaF[uBlaOffset[k - 1] + j].r.x)) break;
+                    found = k;
+                }
+                if (found > 0) {
+                    vec4 ab = blaF[uBlaOffset[found - 1] + (base >> found)].ab;
+                    dz = cmul(ab.xy, dz) + cmul(ab.zw, c);
+                    Dm = cmul(ab.xy, Dm) + (uJulia ? vec2(0.0) : cmul(ab.zw, ldx(Dadd, uScaleE - De)));
+                    int len = 1 << found;
+                    m += len;
+                    n += len;
+                    z = refF[m].xy + dz;
+                    r2 = dot(z, z);
+                    if (r2 > uBailout2) { inside = false; break; }
+                    minR2 = min(minR2, r2);
+                    if (infNorm(z) < infNorm(dz) || m >= uRefLen) {
+                        if (m >= uRefLen && uRefEscaped) glitch = true;
+                        dz = rebaseF(m, dz);
+                        m = 0;
+                    }
+                    float dmx = infNorm(Dm);
+                    if (dmx > 1.0e12) { Dm = ldx(Dm, -40); De += 40; }
+                    else if (dmx < 1.0e-12 && dmx > 0.0) { Dm = ldx(Dm, 40); De -= 40; }
+                    continue;
+                }
+#endif
+            }
+
+            // 2. One ordinary step. The derivative first, with z before the step: D' = p z^(p-1) D + dc/dq.
+            vec2 zp1 = z;
+            for (int k = 1; k < p1; ++k) zp1 = cmul(zp1, z);
+            Dm = float(uPower) * cmul(zp1, Dm) + (uJulia ? vec2(0.0) : ldx(Dadd, uScaleE - De));
+            float dmx = infNorm(Dm);
+            if (dmx > 1.0e12) { Dm = ldx(Dm, -40); De += 40; }
+            else if (dmx < 1.0e-12 && dmx > 0.0) { Dm = ldx(Dm, 40); De -= 40; }
+
+#ifdef TIER_X
+            if (wide) {
+                FC Z = refXv(m);
+                FC twoZ = fcIsZero(Z) ? Z : FC(Z.m, Z.e + 1);
+                dzX = fcAdd(fcMul(fcAdd(twoZ, dzX), dzX), cX);
+                ++m; ++n;
+                zX = fcAdd(refXv(m), dzX);
+                z = fcToVec(zX);
+                r2 = dot(z, z);
+                if (r2 > uBailout2) { inside = false; break; }
+                if (fcLog2(zX) < fcLog2(dzX) || m >= uRefLen) {
+                    if (m >= uRefLen && uRefEscaped) glitch = true;
+                    dzX = rebaseX(m, dzX);
+                    m = 0;
+                }
+                if (dzX.e > -50) { dzF = fcToVec(dzX); wide = false; }
+            } else {
+                vec2 Z = refXf(m);
+                dzF = cmul(2.0 * Z + dzF, dzF) + cF;
+                ++m; ++n;
+                z = refXf(m) + dzF;
+                r2 = dot(z, z);
+                if (r2 > uBailout2) { inside = false; break; }
+                if (infNorm(z) < infNorm(dzF) || m >= uRefLen) {
+                    if (m >= uRefLen && uRefEscaped) glitch = true;
+                    dzF = rebaseXF(m, dzF);
+                    m = 0;
+                }
+                if (infNorm(dzF) < 8.7e-19) { dzX = fcNorm(dzF, 0); wide = true; }   // below 2^-60
+            }
+#else
+            vec2 Z = refF[m].xy;
+            if (uPower == 2) {
+                dz = cmul(2.0 * Z + dz, dz) + c;
+            } else {
+                // (Z + dz)^p - Z^p = dz * sum_k C(p,k) Z^(p-k) dz^(k-1), by Horner's rule in dz.
+                vec2 zpow[8];
+                zpow[0] = vec2(1.0, 0.0);
+                for (int k = 1; k < uPower; ++k) zpow[k] = cmul(zpow[k - 1], Z);
+                vec2 acc = vec2(1.0, 0.0);
+                for (int k = uPower - 1; k >= 1; --k) acc = cmul(acc, dz) + binom(uPower, k) * zpow[uPower - k];
+                dz = cmul(acc, dz) + c;
+            }
+            ++m; ++n;
+            z = refF[m].xy + dz;
+            r2 = dot(z, z);
+            if (r2 > uBailout2) { inside = false; break; }
+            if (infNorm(z) < infNorm(dz) || m >= uRefLen) {
+                if (m >= uRefLen && uRefEscaped) glitch = true;
+                dz = rebaseF(m, dz);
+                m = 0;
+            }
+#endif
+            if (firstR == 0.0 && r2 > 4.0) firstR = sqrt(r2);
+            minR2 = min(minR2, r2);
+            if (uStripe) {
+                stripePrev = stripe;
+                float s = 0.5 + 0.5 * sin(uStripeDensity * atan(z.y, z.x));
+                stripe = stripeCount == 0 ? s : mix(stripe, s, 0.2);
+                ++stripeCount;
+            }
+        }
+        if (firstR == 0.0 && r2 > 4.0) firstR = sqrt(r2);
+        if (!skip && inside && n < uMaxIter) {
+            // Out of budget: save where this pixel is, for the next dispatch.
+            finished = false;
+            int flags = glitch ? 1 : 0;
+#ifdef TIER_X
+            st[si] = vec4(dzF, Dm);
+            st[si + 4] = vec4(dzX.m, intBitsToFloat(dzX.e), intBitsToFloat(wide ? 1 : 0));
+#else
+            st[si] = vec4(dz, Dm);
+#endif
+            st[si + 1] = vec4(z, firstR, minR2);
+            st[si + 2] = vec4(stripe, stripePrev, intBitsToFloat(stripeCount), r2);
+            st[si + 3] = vec4(intBitsToFloat(m), intBitsToFloat(n), intBitsToFloat(De), intBitsToFloat(flags));
+            atomicAdd(stats.unfinished, 1u);
+        } else if (!skip) {
+            st[si + 3].w = intBitsToFloat(2);   // done: later dispatches of this tile leave it alone
+        }
+    }
+
+    const bool report = inTile && !skip && finished;
+    if (report) {
+        vec4 o0, o1;
+        if (inside) {
+            o0 = vec4(-1.0, 0.0, 0.0, 0.0);
+            o1 = vec4(0.0, atan(z.y, z.x), 0.0, sqrt(minR2));
+        } else {
+            float lz = 0.5 * log(r2);
+            float mu = float(n) - log2(max(lz / uLogBailout, 1.0e-6)) / log2(float(uPower));
+            float lenD = length(Dm);
+            float l2de = log2(sqrt(r2) * lz * uHalfH / max(lenD, 1.0e-30)) - float(De);
+            float de = exp2(clamp(l2de, -60.0, 60.0));
+            vec2 u = cmul(z, vec2(Dm.x, -Dm.y));
+            float ul = length(u);
+            vec2 nrm = ul > 0.0 ? u / ul : vec2(0.0);
+            float stripeV = mix(stripePrev, stripe, clamp(fract(mu), 0.0, 1.0));
+            o0 = vec4(mu, de, nrm);
+            o1 = vec4(firstR, atan(z.y, z.x), stripeV, 0.0);
+        }
+        imageStore(uOut0, p, o0);
+        imageStore(uOut1, p, o1);
+
+        uint un = uint(n);
+        atomicMax(sMaxN, un);
+        if (glitch) atomicAdd(sGlitch, 1u);
+        if (inside) atomicAdd(sInside, 1u);
+        else {
+            atomicAdd(sEsc, 1u);
+            atomicMax(sMaxEsc, un);
+            if (n * 2 > uMaxIter) atomicAdd(sNear, 1u);
+        }
+    }
+    barrier();
+    if (report) {
+        // One pixel of the group that reached the most iterations names a spot for a better reference.
+        if (uint(n) == sMaxN) atomicExchange(sMaxIdx, uint(p.y * uSize.x + p.x));
+    }
+    barrier();
+    if (gl_LocalInvocationIndex == 0u && sMaxN > 0u) {
+        uint old = atomicMax(stats.maxN, sMaxN);
+        if (sMaxN > old) stats.maxIdx = sMaxIdx;
+        if (sGlitch > 0u) atomicAdd(stats.glitches, sGlitch);
+        if (sNear > 0u) atomicAdd(stats.nearMax, sNear);
+        if (sEsc > 0u) atomicAdd(stats.escaped, sEsc);
+        if (sInside > 0u) atomicAdd(stats.inside, sInside);
+        atomicMax(stats.maxEscN, sMaxEsc);
+    }
+}

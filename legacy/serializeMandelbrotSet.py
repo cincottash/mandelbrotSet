@@ -13,7 +13,7 @@ def serializeMandelbrotSet(n):
 	#nxn with space for RGB
 	img = np.zeros(shape=[n, n, 3], dtype=np.uint64)
 	
-	#Make n equally spaced values between -2 and 2
+	#Make n equally spaced values between
 	xValuesList = list(np.linspace(-1.5, .5, n))
 	yValuesList = list(np.linspace(-1, 1, n))
 
