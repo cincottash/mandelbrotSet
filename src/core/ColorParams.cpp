@@ -59,6 +59,12 @@ const QList<SliderSpec>& sliderSpecs()
         {"gamma", "Gamma", "EFFECTS", "Below 1 lifts the dark colors; above 1 deepens them.", 0.3, 3.0, 1.0, 2, "", true, false, &C::gamma, 0},
         {"vignette", "Vignette", "EFFECTS", "Darkens the corners.", 0.0, 1.0, 0.0, 2, "", false, false, &C::vignette, 0},
         {"grain", "Film Grain", "EFFECTS", "Adds fine noise, like a photograph.", 0.0, 1.0, 0.0, 2, "", false, false, &C::grain, 0},
+        {"bloom", "Bloom", "EFFECTS", "Bright parts glow softly into their surroundings, like light in a camera lens.",
+         0.0, 2.0, 0.0, 2, "", false, false, &C::bloom, 0},
+        {"bloom_size", "Bloom Size", "EFFECTS", "How far the glow spreads, as a share of the picture's height.",
+         0.3, 15.0, 2.5, 1, "%", true, false, &C::bloomSize, 0},
+        {"bloom_threshold", "Bloom Threshold", "EFFECTS", "How bright a color must be to glow. Lower makes more of the picture glow.",
+         0.0, 1.0, 0.6, 2, "", false, false, &C::bloomThreshold, 0},
     };
     return list;
 }
@@ -153,6 +159,9 @@ const QList<Look>& looks()
             p.lightStrength = 0.3;
             p.vignette = 0.45;
             p.grain = 0.15;
+            p.bloom = 0.7;
+            p.bloomSize = 3.0;
+            p.bloomThreshold = 0.55;
             l.append({QStringLiteral("Nebula Glow"), p});
         }
         {

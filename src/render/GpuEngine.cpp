@@ -1,5 +1,7 @@
 #include "GpuEngine.h"
 
+#include "core/Bloom.h"
+
 #include <QFile>
 #include <QOpenGLContext>
 #include <QRect>
@@ -95,7 +97,8 @@ bool GpuEngine::init(QString* error)
     const QByteArray vert = loadShader(QStringLiteral("fullscreen.vert"));
     const QByteArray color = loadShader(QStringLiteral("colorize.frag"));
     const QByteArray disp = loadShader(QStringLiteral("display.frag"));
-    if (iter.isEmpty() || vert.isEmpty() || color.isEmpty() || disp.isEmpty()) {
+    const QByteArray bloomSrc = loadShader(QStringLiteral("bloom.frag"));
+    if (iter.isEmpty() || vert.isEmpty() || color.isEmpty() || disp.isEmpty() || bloomSrc.isEmpty()) {
         if (error) *error = QStringLiteral("The shader files are missing from the program.");
         return false;
     }
@@ -119,6 +122,15 @@ bool GpuEngine::init(QString* error)
         const unsigned v = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
         const unsigned d = v ? compile(QStringLiteral("display"), head + disp, GL_FRAGMENT_SHADER, &err) : 0;
         m_progDisplay = d ? link({v, d}, &err) : 0;
+    }
+    if (m_progDisplay) {
+        const unsigned v = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
+        const unsigned b = v ? compile(QStringLiteral("bloom"), head + bloomSrc, GL_FRAGMENT_SHADER, &err) : 0;
+        m_progBloom = b ? link({v, b}, &err) : 0;
+        if (!m_progBloom) {
+            glDeleteProgram(m_progDisplay);
+            m_progDisplay = 0;
+        }
     }
     if (!m_progDisplay) {
         if (error) *error = err;
@@ -162,8 +174,13 @@ bool GpuEngine::init(QString* error)
 void GpuEngine::release()
 {
     if (!QOpenGLContext::currentContext()) return;
-    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay})
+    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay, &m_progBloom})
         if (*p) { glDeleteProgram(*p); *p = 0; }
+    for (int i = 0; i < 2; ++i) {
+        if (m_bloomFbo[i]) { glDeleteFramebuffers(1, &m_bloomFbo[i]); m_bloomFbo[i] = 0; }
+        if (m_bloomTex[i]) { glDeleteTextures(1, &m_bloomTex[i]); m_bloomTex[i] = 0; }
+    }
+    m_bloomW = m_bloomH = 0;
     if (m_progBoxes) { glDeleteProgram(m_progBoxes); m_progBoxes = 0; }
     for (unsigned* b : {&m_refF, &m_refX, &m_blaF, &m_blaX, &m_stats, &m_state, &m_blocks})
         if (*b) { glDeleteBuffers(1, b); *b = 0; }
@@ -490,6 +507,7 @@ void GpuEngine::colorize(const RawFrame& raw, const core::ColorParams& c, double
                          QSize whole, QPoint origin)
 {
     if (!m_ready || !raw.tex0) return;
+    const bool onePiece = whole.isEmpty();
     ensureTarget(target, raw.outW, raw.outH);
     GLint prevFbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
@@ -551,9 +569,64 @@ void GpuEngine::colorize(const RawFrame& raw, const core::ColorParams& c, double
         glActiveTexture(GLenum(GL_TEXTURE0 + unit));
         glBindTexture(GL_TEXTURE_2D, 0);
     }
+    // A picture drawn in pieces gets its bloom once whole (on the CPU, RenderCore::renderImage).
+    if (c.bloom > 0 && onePiece) bloom(target, c);
     glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
     target.view = raw.view;
     target.valid = true;
+}
+
+void GpuEngine::bloom(ColorTarget& target, const core::ColorParams& c)
+{
+    const core::BloomPlan p = core::bloomPlan(target.w, target.h, c.bloomSize);
+    if (m_bloomW != p.smallW || m_bloomH != p.smallH) {
+        for (int i = 0; i < 2; ++i) {
+            if (m_bloomFbo[i]) glDeleteFramebuffers(1, &m_bloomFbo[i]);
+            if (m_bloomTex[i]) glDeleteTextures(1, &m_bloomTex[i]);
+            glGenTextures(1, &m_bloomTex[i]);
+            glBindTexture(GL_TEXTURE_2D, m_bloomTex[i]);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, p.smallW, p.smallH);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glGenFramebuffers(1, &m_bloomFbo[i]);
+            glBindFramebuffer(GL_FRAMEBUFFER, m_bloomFbo[i]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_bloomTex[i], 0);
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
+        m_bloomW = p.smallW;
+        m_bloomH = p.smallH;
+    }
+    glUseProgram(m_progBloom);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progBloom, n); };
+    glUniform1i(loc("uSrc"), 0);
+    glUniform1i(loc("uFactor"), p.factor);
+    glUniform1f(loc("uThreshold"), float(c.bloomThreshold));
+    glUniform1f(loc("uSigma"), float(p.sigma));
+    glUniform1i(loc("uRadius"), p.radius);
+    glUniform1f(loc("uStrength"), float(c.bloom));
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(m_vao);
+    auto pass = [&](int mode, unsigned src, QSize srcSize, unsigned fbo, QSize outSize, QPoint dir) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, outSize.width(), outSize.height());
+        glBindTexture(GL_TEXTURE_2D, src);
+        glUniform1i(loc("uMode"), mode);
+        glUniform2i(loc("uSrcSize"), srcSize.width(), srcSize.height());
+        glUniform2i(loc("uDir"), dir.x(), dir.y());
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    };
+    const QSize full(target.w, target.h), small(p.smallW, p.smallH);
+    pass(0, target.tex, full, m_bloomFbo[0], small, {});
+    pass(1, m_bloomTex[0], small, m_bloomFbo[1], small, {1, 0});
+    pass(1, m_bloomTex[1], small, m_bloomFbo[0], small, {0, 1});
+    // Screen blend: picture + glow - picture * glow.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
+    pass(2, m_bloomTex[0], small, target.fbo, full, {});
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
 }
 
 void GpuEngine::display(const ColorTarget& picture, const core::View& cur, int screenW, int screenH, const QColor& bg)

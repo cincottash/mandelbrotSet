@@ -268,6 +268,9 @@ ColorParams randomColors(QRandomGenerator& rnd, const ColorParams& base)
     c.gamma = 1.0;
     c.vignette = chance(rnd, 0.3) ? uniform(rnd, 0.2, 0.6) : 0.0;
     c.grain = chance(rnd, 0.2) ? uniform(rnd, 0.05, 0.25) : 0.0;
+    c.bloom = chance(rnd, 0.3) ? uniform(rnd, 0.3, 1.2) : 0.0;
+    c.bloomSize = logUniform(rnd, 1.0, 6.0);
+    c.bloomThreshold = uniform(rnd, 0.45, 0.8);
     return c;
 }
 

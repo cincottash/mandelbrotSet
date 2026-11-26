@@ -69,7 +69,7 @@ target_compile_definitions(engine PUBLIC
     APP_NAME="${APP_NAME}" APP_TITLE="${APP_TITLE}" APP_ORG="${APP_ORG}" APP_VERSION="${APP_VERSION}")
 qt_add_resources(engine shaders PREFIX "/shaders" BASE src/render/shaders FILES
     src/render/shaders/iterate.comp src/render/shaders/colorize.frag src/render/shaders/display.frag
-    src/render/shaders/fullscreen.vert src/render/shaders/boxes.comp)
+    src/render/shaders/fullscreen.vert src/render/shaders/boxes.comp src/render/shaders/bloom.frag)
 
 set(SOURCES ${APP_SOURCES})
 if(WIN32)

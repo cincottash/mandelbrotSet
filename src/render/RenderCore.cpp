@@ -1,5 +1,6 @@
 #include "RenderCore.h"
 
+#include "core/Bloom.h"
 #include "core/Palette.h"
 
 #include <QElapsedTimer>
@@ -571,6 +572,8 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
         if (error) *error = QStringLiteral("Cancelled.");
         return {};
     }
+    // The glow spans the pieces, so it is added once the picture is whole.
+    core::applyBloom(out, m_colors.bloom, m_colors.bloomSize, m_colors.bloomThreshold);
     return out;
 }
 

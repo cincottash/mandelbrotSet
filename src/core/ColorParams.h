@@ -45,6 +45,7 @@ struct ColorParams {
 
     double hue = 0.0, saturation = 1.0, brightness = 0.0, contrast = 1.0, gamma = 1.0;
     double vignette = 0.0, grain = 0.0;
+    double bloom = 0.0, bloomSize = 2.5, bloomThreshold = 0.6;   // bloomSize: % of the picture's height
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject& o);

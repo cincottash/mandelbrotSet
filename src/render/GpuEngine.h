@@ -110,6 +110,11 @@ private:
     void ensureFrameTextures(RawFrame& f, int w, int h);
     void dispatchTile(const QRect& r, int slot, int budget, bool resume, int pixelSet);
     void bindPassUniforms();
+    void bloom(ColorTarget& target, const core::ColorParams& c);   // the glow, on the finished colors
+
+    unsigned m_progBloom = 0;
+    unsigned m_bloomTex[2] = {0, 0}, m_bloomFbo[2] = {0, 0};
+    int m_bloomW = 0, m_bloomH = 0;
 
     bool m_ready = false;
     QString m_renderer;
