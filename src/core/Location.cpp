@@ -1,5 +1,7 @@
 #include "Location.h"
 
+#include "Palette.h"
+
 #include <QBuffer>
 #include <QFile>
 #include <QJsonDocument>
@@ -149,6 +151,73 @@ QList<Location> builtInPlaces()
         l.builtIn = true;
         out << l;
     }
+    return out;
+}
+
+QList<Location> galleryPlaces()
+{
+    const QList<Location> spots = builtInPlaces();
+    auto spot = [&](const char* name) {
+        for (const Location& l : spots)
+            if (l.name == QLatin1String(name)) return l;
+        return spots.front();
+    };
+    auto look = [](int i) { return looks()[i].params; };
+    QList<Location> out;
+    auto add = [&](const char* name, Location l, const ColorParams& c) {
+        l.name = QString::fromUtf8(name);
+        l.colors = c;
+        l.hasColors = true;
+        l.builtIn = true;
+        out << l;
+    };
+    ColorParams black = look(0);
+    black.interiorColor = QColor(0, 0, 0);
+    {
+        ColorParams c = black;
+        c.buddhaNebula = 1;
+        add("Nebulabrot", spot("Buddhabrot"), c);
+        c.buddhaNebula = 0;
+        c.palette = QStringLiteral("Fire");
+        add("Buddhabrot", spot("Buddhabrot"), c);
+    }
+    add("The Mandelbrot Set", spot("Whole Set"), look(0));
+    add("Seahorse Valley", spot("Seahorse Valley"), look(2));
+    add("Elephant Valley", spot("Elephant Valley"), look(9));
+    {
+        ColorParams c = look(0);
+        c.palette = QStringLiteral("Fire");
+        c.density = 0.8;
+        add("The Burning Ship", spot("Burning Ship: The Ship"), c);
+    }
+    add("The Tricorn", spot("Tricorn"), look(3));
+    add("Douady Rabbit", spot("Julia: Douady Rabbit"), look(9));
+    add("Dragon Julia Set", spot("Julia: Dragon"), look(4));
+    add("Siegel Disk", spot("Julia: Siegel Disk"), look(7));
+    add("San Marco Dragon", spot("Julia: San Marco"), look(8));
+    {
+        ColorParams c = look(0);
+        c.style = int(ColorStyle::OrbitTrap);
+        c.trapShape = int(TrapShape::Cross);
+        c.palette = QStringLiteral("Electric");
+        add("Pickover Stalks", spot("Seahorse Valley"), c);
+    }
+    {
+        ColorParams c = look(4);
+        c.sphereSize = 0.85;
+        c.bloom = 0.5;
+        add("Julia Sphere", spot("Julia: Douady Rabbit"), c);
+    }
+    add("Lavender Moiré", spot("Whole Set"), look(1));
+    {
+        Location l = spot("Whole Set");
+        l.fractal.power = 3;
+        l.view.cx = BigFloat(0.0, 128);
+        add("Multibrot (Power 3)", l, look(2));
+    }
+    add("Burning Ship Julia Set", spot("Burning Ship: Julia"), look(4));
+    add("Mini Mandelbrot", spot("Mini Mandelbrot"), look(5));
+    add("Seahorse Spiral, 1e-30", spot("Seahorse Spiral, 1e-30"), look(6));
     return out;
 }
 
