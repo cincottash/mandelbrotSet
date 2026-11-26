@@ -1,5 +1,7 @@
 #include "MovieWriter.h"
 
+#include "GifEncoder.h"
+
 #include <QDir>
 #include <QFile>
 #include <QSaveFile>
@@ -104,6 +106,37 @@ private:
     int m_frames = 0;
     WebPAnimEncoder* m_enc = nullptr;
     WebPConfig m_cfg;
+};
+
+// ---------------------------------------------------------------- animated GIF
+
+class GifWriter : public MovieWriter {
+public:
+    GifWriter(const QString& path) : m_file(path) {}
+    bool open(int w, int h, int fps, QString* error)
+    {
+        if (!m_file.open(QIODevice::WriteOnly) || !m_enc.begin(&m_file, w, h, fps)) {
+            if (error) *error = QStringLiteral("Couldn't create %1.").arg(QDir::toNativeSeparators(m_file.fileName()));
+            return false;
+        }
+        return true;
+    }
+    bool add(const QImage& frame, QString* error) override
+    {
+        if (m_enc.add(frame)) return true;
+        if (error) *error = QStringLiteral("Couldn't write %1 (is the disk full?).").arg(QDir::toNativeSeparators(m_file.fileName()));
+        return false;
+    }
+    bool finish(QString* error) override
+    {
+        if (m_enc.finish() && m_file.commit()) return true;
+        if (error) *error = QStringLiteral("Couldn't write %1.").arg(QDir::toNativeSeparators(m_file.fileName()));
+        return false;
+    }
+
+private:
+    QSaveFile m_file;
+    GifEncoder m_enc;
 };
 
 // ---------------------------------------------------------------- MP4 (Windows Media Foundation)
@@ -223,7 +256,7 @@ private:
 
 QStringList MovieWriter::formatNames()
 {
-    return {QStringLiteral("MP4 Video"), QStringLiteral("Animated WebP"), QStringLiteral("PNG Frames")};
+    return {QStringLiteral("MP4 Video"), QStringLiteral("Animated WebP"), QStringLiteral("PNG Frames"), QStringLiteral("Animated GIF")};
 }
 
 QString MovieWriter::extension(Format f)
@@ -231,8 +264,16 @@ QString MovieWriter::extension(Format f)
     switch (f) {
     case Format::Mp4: return QStringLiteral(".mp4");
     case Format::WebP: return QStringLiteral(".webp");
+    case Format::Gif: return QStringLiteral(".gif");
     default: return QString();
     }
+}
+
+MovieWriter::Format MovieWriter::fromPath(const QString& path)
+{
+    for (Format f : {Format::Mp4, Format::WebP, Format::Gif})
+        if (path.endsWith(extension(f), Qt::CaseInsensitive)) return f;
+    return Format::PngFrames;
 }
 
 bool MovieWriter::available(Format f, QString* why)
@@ -279,6 +320,15 @@ std::unique_ptr<MovieWriter> MovieWriter::create(Format f, const QString& path, 
             if (error) *error = QStringLiteral("The WebP encoder couldn't start.");
             return nullptr;
         }
+        return wr;
+    }
+    case Format::Gif: {
+        if (w > 65535 || h > 65535) {
+            if (error) *error = QStringLiteral("GIF pictures can be at most 65535 pixels on a side.");
+            return nullptr;
+        }
+        auto wr = std::make_unique<GifWriter>(path);
+        if (!wr->open(w, h, fps, error)) return nullptr;
         return wr;
     }
     case Format::Mp4: {

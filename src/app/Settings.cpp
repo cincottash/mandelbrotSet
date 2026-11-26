@@ -24,7 +24,11 @@ void fields(Settings& s, F&& f)
     f("zoom_speed_pct", s.zoomSpeedPct);
     f("session", s.session);
     f("last_folder", s.lastFolder);
+    f("custom_palettes", s.customPalettes);
 }
+
+void get(const QJsonObject& o, const char* k, QJsonArray& v) { if (o.value(QLatin1String(k)).isArray()) v = o.value(QLatin1String(k)).toArray(); }
+void put(QJsonObject& o, const char* k, const QJsonArray& v) { o[QLatin1String(k)] = v; }
 
 void get(const QJsonObject& o, const char* k, QString& v) { if (o.value(QLatin1String(k)).isString()) v = o.value(QLatin1String(k)).toString(); }
 void get(const QJsonObject& o, const char* k, bool& v) { if (o.value(QLatin1String(k)).isBool()) v = o.value(QLatin1String(k)).toBool(); }

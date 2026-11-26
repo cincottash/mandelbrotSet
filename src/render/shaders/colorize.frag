@@ -10,7 +10,7 @@ uniform int uSS;
 uniform ivec2 uOutSize;       // the whole picture's size in pixels
 uniform ivec2 uOrigin;        // where this part starts in the whole picture
 
-uniform int uStyle;           // 0 gradient, 1 sine waves, 2 moire, 3 distance, 4 stripes, 5 angle
+uniform int uStyle;           // 0 gradient, 1 sine waves, 2 moire, 3 distance, 4 stripes, 5 angle, 6 orbit trap
 uniform int uScale;           // 0 linear, 1 square root, 2 log
 uniform float uDensity;
 uniform float uOffset;
@@ -110,6 +110,9 @@ vec3 sampleColor(ivec2 rawPx, ivec2 outPx)
         col = palette(r1.z * uDensity + uOffset);
     } else if (uStyle == 5) {
         col = palette(r1.y / TAU * uDensity + uOffset);
+    } else if (uStyle == 6) {
+        // Orbit trap: how close the orbit came to the trap, on a log scale (each halving moves 1/4 of a turn).
+        col = palette(-log2(max(r1.z, 1.0e-12)) * 0.25 * uDensity + uOffset);
     } else {
         col = palette(t);
     }

@@ -1,6 +1,8 @@
 #include "RenderCore.h"
 
+#include "core/Bloom.h"
 #include "core/Palette.h"
+#include "core/Sphere.h"
 
 #include <QElapsedTimer>
 #include <QPainter>
@@ -23,8 +25,11 @@ bool sameView(const core::View& a, const core::View& b)
 bool samePassContent(const PassParams& a, const PassParams& b)
 {
     return sameView(a.view, b.view) && a.maxIterations == b.maxIterations && a.escapeRadius == b.escapeRadius
-        && a.julia == b.julia && a.power == b.power && a.stripes == b.stripes && a.stripeDensity == b.stripeDensity
-        && a.wideRange == b.wideRange && a.useBla == b.useBla && a.offset.x == b.offset.x && a.offset.y == b.offset.y
+        && a.julia == b.julia && a.power == b.power && a.formula == b.formula && a.stripes == b.stripes
+        && a.stripeDensity == b.stripeDensity && a.trap == b.trap && a.trapX == b.trapX && a.trapY == b.trapY
+        && a.trapSize == b.trapSize
+        && a.wideRange == b.wideRange && a.useBla == b.useBla && a.boxing == b.boxing && a.shallowCheck == b.shallowCheck
+        && a.offset.x == b.offset.x && a.offset.y == b.offset.y
         && a.offset.e == b.offset.e;
 }
 
@@ -57,8 +62,13 @@ void RenderCore::setFractal(const core::FractalParams& f)
 
 void RenderCore::setColors(const core::ColorParams& c)
 {
+    // Stripes and orbit traps are gathered while iterating: changing them renders again.
+    auto trapKey = [](const core::ColorParams& p) {
+        return p.style == int(core::ColorStyle::OrbitTrap)
+            ? QStringLiteral("%1 %2 %3 %4").arg(p.trapShape).arg(p.trapX).arg(p.trapY).arg(p.trapSize) : QString();
+    };
     const bool stripes = (c.style == int(core::ColorStyle::Stripes)) != (m_colors.style == int(core::ColorStyle::Stripes))
-        || c.stripeDensity != m_colors.stripeDensity;
+        || c.stripeDensity != m_colors.stripeDensity || trapKey(c) != trapKey(m_colors);
     m_colors = c;
     m_colorsDirty = true;
     if (stripes) m_dirty = true;
@@ -85,7 +95,7 @@ void RenderCore::setOutputSize(int w, int h)
 
 core::FloatExp RenderCore::minimumScale() const
 {
-    if (m_fractal.power != 2) return core::FloatExp(1.0, int64_t(kWideBelowLog2) + 1);
+    if (!m_fractal.deepCapable()) return core::FloatExp(1.0, int64_t(kWideBelowLog2) + 1);
     return core::FloatExp(1.0, -1'999'000);
 }
 
@@ -131,7 +141,7 @@ bool RenderCore::referenceWanted(const core::View& v, int maxIt, int w, int h, b
     // Far from the reference: the pixel offsets lose precision, so start again from the view's center.
     const core::FloatExp off = v.centerOffsetFrom(o.request.x, o.request.y).abs();
     if (off > v.scale * core::FloatExp(64.0)) return true;
-    if (m_fractal.power == 2 && m_useBla) {
+    if (m_fractal.deepCapable() && m_useBla) {
         const core::FloatExp need = dcMaxFor(v, o.request.x, o.request.y, w, h);
         if (!m_ref.bla || need > m_ref.bla->dcMax || m_ref.bla->dcMax > need * core::FloatExp(1024.0)) {
             *tableOnly = true;
@@ -165,6 +175,7 @@ void RenderCore::requestReference(const core::View& v, int maxIt, int w, int h, 
         rq.seedX = m_fractal.seedX(rq.precision);
         rq.seedY = m_fractal.seedY(rq.precision);
         rq.power = m_fractal.power;
+        rq.formula = int(m_fractal.formula);
         rq.maxIterations = maxIt;
         rq.escapeRadius = m_fractal.escapeRadius;
     }
@@ -194,7 +205,7 @@ void RenderCore::startWorker(Job job)
             orbit = o;
         }
         auto bla = std::make_shared<core::BlaTable>();
-        if (ok && job.request.power == 2) ok = core::buildBla(*orbit, job.dcMax, std::ldexp(1.0, -24), bla.get(), false, &m_cancel);
+        if (ok && job.request.power == 2 && job.request.formula == 0) ok = core::buildBla(*orbit, job.dcMax, std::ldexp(1.0, -24), bla.get(), false, &m_cancel);
         if (ok) {
             m_jobOrbit = orbit;
             m_jobBla = bla;
@@ -243,11 +254,23 @@ PassParams RenderCore::passParams(const core::View& v, int outW, int outH, int s
     p.escapeRadius = m_fractal.escapeRadius;
     p.julia = m_fractal.julia();
     p.power = m_fractal.power;
+    p.formula = int(m_fractal.formula);
     p.stripes = m_colors.style == int(core::ColorStyle::Stripes);
     p.stripeDensity = m_colors.stripeDensity;
+    if (m_colors.style == int(core::ColorStyle::OrbitTrap)) {
+        p.trap = m_colors.trapShape;
+        p.trapX = m_colors.trapX;
+        p.trapY = m_colors.trapY;
+        p.trapSize = m_colors.trapSize;
+    }
     if (m_ref.orbit) p.offset = v.centerOffsetFrom(m_ref.orbit->request.x, m_ref.orbit->request.y);
-    p.wideRange = m_fractal.power == 2 && v.scale.log2Abs() < kWideBelowLog2;
-    p.useBla = m_useBla && m_ref.bla && m_ref.bla->valid() && m_fractal.power == 2;
+    p.wideRange = m_fractal.deepCapable() && v.scale.log2Abs() < kWideBelowLog2;
+    p.useBla = m_useBla && m_ref.bla && m_ref.bla->valid() && m_fractal.deepCapable();
+    // Boxing fills enclosed inside pixels without their "Depth" value, so it is off for the colorings that show it.
+    // Cheap views (few iterations) don't gain from boxing's extra passes. The Burning Ship and the Tricorn aren't
+    // polynomials of c, so their inside can have holes: no boxing there.
+    p.boxing = m_boxing && m_colors.interiorStyle != int(core::InteriorStyle::Depth) && maxIt >= 4096 && m_fractal.classic();
+    p.shallowCheck = m_boxing && m_colors.interiorStyle != int(core::InteriorStyle::Depth) && m_fractal.classic();
     if (p.useBla && m_ref.orbit) {
         const core::FloatExp need = dcMaxFor(v, m_ref.orbit->request.x, m_ref.orbit->request.y, outW, outH);
         if (need > m_ref.bla->dcMax) p.useBla = false;   // the table would give wrong results this far out
@@ -326,9 +349,99 @@ void RenderCore::planePoint(const core::View& v, int w, int h, double px, double
     v.pointAt((px - w / 2.0) / hh, -(py - hh) / hh, x, y);
 }
 
+BuddhaParams RenderCore::buddhaParams(const core::View& v, int w, int h) const
+{
+    BuddhaParams p;
+    p.cx = v.cx.toDouble();
+    p.cy = v.cy.toDouble();
+    p.scale = v.scale.toDouble();
+    p.angle = v.angle;
+    p.w = std::max(1, w);
+    p.h = std::max(1, h);
+    p.limits[0] = m_fractal.buddhaRed;
+    p.limits[1] = m_fractal.buddhaGreen;
+    p.limits[2] = m_fractal.buddhaBlue;
+    p.minIter = m_fractal.buddhaMin;
+    p.formula = int(m_fractal.formula);
+    p.power = m_fractal.power;
+    if (m_fractal.classic() && m_fractal.power == 2) {
+        p.boxX = -2.05; p.boxY = -1.2; p.boxW = 2.6; p.boxH = 2.4;   // the whole set, a little wider
+    } else {
+        core::FractalParams f = m_fractal;
+        f.type = core::FractalType::Mandelbrot;
+        const core::View h0 = f.home();
+        p.boxX = h0.cx.toDouble() - 2.2; p.boxY = h0.cy.toDouble() - 2.2; p.boxW = 4.4; p.boxH = 4.4;
+    }
+    return p;
+}
+
+bool RenderCore::buddhaStep(double budgetMs)
+{
+    if (m_colors.palette != m_paletteName || core::paletteRevision() != m_paletteRevision) {
+        m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
+        m_paletteName = m_colors.palette;
+        m_paletteRevision = core::paletteRevision();
+        m_colorsDirty = true;
+    }
+    const BuddhaParams p = buddhaParams(m_view, m_w, m_h);
+    if (!m_buddhaActive || !(p == m_buddhaKey)) {
+        // A new view or new limits: count afresh.
+        m_gpu.buddhaReset(p.w, p.h);
+        m_buddhaKey = p;
+        m_buddhaSamples = 0;
+        m_buddhaActive = true;
+    }
+    const bool more = m_buddhaSamples < buddhaTarget(p.w, p.h);
+    if (more) {
+        m_buddhaSamples += m_gpu.buddhaAccumulate(p, budgetMs * 0.85);
+        m_colorsDirty = true;
+    }
+    if (m_colorsDirty) {
+        m_gpu.buddhaColorize(p, m_colors, m_picture);
+        m_picture.view = m_view;
+        m_colorsDirty = false;
+    }
+    m_passActive = m_buddhaSamples < buddhaTarget(p.w, p.h);
+    m_dirty = false;
+    return m_passActive;
+}
+
+QImage RenderCore::renderBuddha(const core::View& v, int w, int h, QString* error, const std::function<bool(double)>& progress)
+{
+    if (w > 8192 || h > 8192) {
+        if (error) *error = QStringLiteral("Buddhabrot pictures can be at most 8192 pixels on a side.");
+        return {};
+    }
+    m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
+    m_paletteName = m_colors.palette;
+    m_paletteRevision = core::paletteRevision();
+    const BuddhaParams p = buddhaParams(v, w, h);
+    m_gpu.buddhaReset(w, h);
+    m_buddhaActive = false;   // the counts now belong to this picture: the window starts again afterwards
+    const qint64 target = buddhaTarget(w, h);
+    qint64 done = 0;
+    while (done < target) {
+        done += m_gpu.buddhaAccumulate(p, 120.0);
+        if (progress && !progress(std::min(1.0, double(done) / double(target)))) {
+            if (error) *error = QStringLiteral("Cancelled.");
+            m_colorsDirty = true;
+            return {};
+        }
+    }
+    ColorTarget t;
+    m_gpu.buddhaColorize(p, m_colors, t);
+    QImage img = m_gpu.readTarget(t);
+    m_gpu.freeTarget(t);
+    m_colorsDirty = true;
+    m_dirty = true;
+    return img;
+}
+
 bool RenderCore::step(double budgetMs, bool moving)
 {
     if (!m_gpu.ready()) return false;
+    if (m_fractal.buddhabrot()) return buddhaStep(budgetMs);
+    m_buddhaActive = false;
     QElapsedTimer timer;
     timer.start();
     collectWorker();
@@ -341,9 +454,10 @@ bool RenderCore::step(double budgetMs, bool moving)
         return true;
     }
     m_waiting = false;
-    if (m_colors.palette != m_paletteName) {
+    if (m_colors.palette != m_paletteName || core::paletteRevision() != m_paletteRevision) {
         m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
         m_paletteName = m_colors.palette;
+        m_paletteRevision = core::paletteRevision();
         m_colorsDirty = true;
     }
 
@@ -427,12 +541,17 @@ CoreStatus RenderCore::status() const
     s.referenceTarget = m_jobTarget;
     s.waiting = m_waiting;
     s.maxIterations = maxIterationsFor(m_view);
-    s.wideRange = m_fractal.power == 2 && m_view.scale.log2Abs() < kWideBelowLog2;
+    s.wideRange = m_fractal.deepCapable() && m_view.scale.log2Abs() < kWideBelowLog2;
     s.lastPassMs = m_lastFullMs;
     s.lastPassW = m_lastFullW;
     s.lastPassH = m_lastFullH;
     s.refining = m_passActive;
     s.progress = m_passActive ? m_gpu.passProgress() : 1.0;
+    if (m_fractal.buddhabrot()) {
+        s.progress = std::min(1.0, double(m_buddhaSamples) / double(std::max<qint64>(1, buddhaTarget(m_w, m_h))));
+        s.waiting = false;
+        s.wideRange = false;
+    }
     s.previewDivisor = m_passActive ? m_activeDivisor : 1;
     s.glitchPixels = m_lastGlitches;
     if (m_ref.orbit) {
@@ -442,12 +561,35 @@ CoreStatus RenderCore::status() const
     return s;
 }
 
-QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QString* error,
+QImage RenderCore::renderImage(const core::View& v, int w, int h, int ss, QString* error,
                                const std::function<bool(double)>& progress)
+{
+    return renderImpl(v, w, h, ss, error, progress, nullptr);
+}
+
+bool RenderCore::renderRaw(const core::View& v, int w, int h, int ss, RawFrame* out, QString* error,
+                           const std::function<bool(double)>& progress)
+{
+    if (qint64(w) * h * ss * ss > kMaxRawPixels) {
+        if (error) *error = QStringLiteral("The frame is too large to keep whole.");
+        return false;
+    }
+    return !renderImpl(v, w, h, ss, error, progress, out).isNull();
+}
+
+QImage RenderCore::renderImpl(const core::View& v0, int w, int h, int ss, QString* error,
+                              const std::function<bool(double)>& progress, RawFrame* keep)
 {
     if (!m_gpu.ready()) {
         if (error) *error = QStringLiteral("The graphics card renderer isn't available.");
         return {};
+    }
+    if (m_fractal.buddhabrot()) {
+        if (keep) {
+            if (error) *error = QStringLiteral("Buddhabrot frames are counted, not kept.");
+            return {};
+        }
+        return renderBuddha(v0, w, h, error, progress);
     }
     if (w < 1 || h < 1 || w > 32768 || h > 32768) {
         if (error) *error = QStringLiteral("The picture size must be between 1 and 32768 pixels on each side.");
@@ -458,6 +600,7 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
     v.fitPrecision();
     m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
     m_paletteName = m_colors.palette;
+    m_paletteRevision = core::paletteRevision();
     int maxIt = maxIterationsFor(v);
 
     // A reference that fits this view, computed here and now.
@@ -506,10 +649,10 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
         }
     }
 
-    // Large pictures are drawn in pieces, so the graphics card's memory is never the limit.
-    const int maxRawPixels = 16 * 1024 * 1024;
-    const int piece = std::max(64, int(std::sqrt(double(maxRawPixels)) / ss));
-    QImage out(w, h, QImage::Format_RGB32);
+    // Large pictures are drawn in pieces, so the graphics card's memory is never the limit. A kept raw frame is one
+    // piece (renderRaw checked its size).
+    const int piece = keep ? std::max(w, h) : std::max(64, int(std::sqrt(double(kMaxRawPixels)) / ss));
+    QImage out(keep ? 1 : w, keep ? 1 : h, QImage::Format_RGB32);
     out.fill(Qt::black);
     QPainter painter(&out);
     ColorTarget target;
@@ -551,6 +694,16 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
                 capturedRaw1 = m_gpu.readRaw(frame, 1);
                 capturedStats = frame.stats;
             }
+            if (keep) {
+                // The raw numbers stay on the graphics card for the caller; nothing is colored.
+                frame.view = pv;
+                frame.maxIterations = maxIt;
+                m_gpu.freeFrame(*keep);
+                *keep = frame;
+                frame = RawFrame();
+                donePixels += qint64(pw) * ph;
+                continue;
+            }
             m_gpu.colorize(frame, m_colors, m_time, target, QSize(w, h), QPoint(x0, y0));
             painter.drawImage(x0, y0, m_gpu.readTarget(target));
             donePixels += qint64(pw) * ph;
@@ -566,6 +719,21 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
         if (error) *error = QStringLiteral("Cancelled.");
         return {};
     }
+    if (keep) return out;
+    // The ball and the glow span the pieces, so they are added once the picture is whole.
+    if (m_colors.sphereSize > 0) {
+        core::SphereLook s;
+        s.size = m_colors.sphereSize;
+        s.shade = m_colors.sphereShade;
+        s.shine = m_colors.sphereShine;
+        s.background = m_colors.sphereBackground;
+        const double a = m_colors.lightAngle * M_PI / 180.0, hh = m_colors.lightHeight * M_PI / 180.0;
+        s.lightX = std::cos(a) * std::cos(hh);
+        s.lightY = std::sin(a) * std::cos(hh);
+        s.lightZ = std::sin(hh);
+        out = core::applySphere(out, s);
+    }
+    core::applyBloom(out, m_colors.bloom, m_colors.bloomSize, m_colors.bloomThreshold);
     return out;
 }
 

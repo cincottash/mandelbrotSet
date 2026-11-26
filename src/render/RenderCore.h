@@ -66,6 +66,13 @@ public:
     // `progress` gets 0..1 and returns false to cancel. A null image on cancel or error.
     QImage renderImage(const core::View& v, int w, int h, int ss, QString* error,
                        const std::function<bool(double)>& progress = {});
+    // The same, keeping the raw numbers on the graphics card instead of coloring them (movie keyframes). The frame
+    // must fit one piece (w * h * ss^2 at most kMaxRawPixels). The caller frees `out` with GpuEngine::freeFrame().
+    bool renderRaw(const core::View& v, int w, int h, int ss, RawFrame* out, QString* error,
+                   const std::function<bool(double)>& progress = {});
+    static constexpr int kMaxRawPixels = 16 * 1024 * 1024;
+    const core::ColorParams& colors() const { return m_colors; }
+    double time() const { return m_time; }
 
     // Computes a reference orbit for the deepest view of a movie now, so every frame of a zoom toward it reuses it.
     bool prepareReference(const core::View& deepest, int w, int h);
@@ -78,6 +85,7 @@ public:
     void planePoint(const core::View& v, int w, int h, double px, double py, core::BigFloat* x, core::BigFloat* y) const;
     // Testing: turn the iteration skipping off or on, and force a reference point.
     void setUseBla(bool on) { m_useBla = on; m_dirty = true; }
+    void setBoxing(bool on) { m_boxing = on; m_dirty = true; }
     bool useBla() const { return m_useBla; }
     int autoIterations() const { return m_autoIter; }
     // Testing: renderImage() keeps the raw numbers of its last piece here when this is on.
@@ -113,6 +121,16 @@ private:
     void stopWorker();
     PassParams passParams(const core::View& v, int outW, int outH, int ss, int maxIt) const;
     void afterFullPass(const RawFrame& f);
+    QImage renderImpl(const core::View& v, int w, int h, int ss, QString* error,
+                      const std::function<bool(double)>& progress, RawFrame* keep);
+    // Buddhabrot: a counting renderer instead of the escape-time one.
+    BuddhaParams buddhaParams(const core::View& v, int w, int h) const;
+    static qint64 buddhaTarget(int w, int h) { return qint64(w) * h * 150; }
+    bool buddhaStep(double budgetMs);
+    QImage renderBuddha(const core::View& v, int w, int h, QString* error, const std::function<bool(double)>& progress);
+    BuddhaParams m_buddhaKey;
+    qint64 m_buddhaSamples = 0;
+    bool m_buddhaActive = false;
 
     GpuEngine& m_gpu;
     core::FractalParams m_fractal;
@@ -121,9 +139,11 @@ private:
     int m_w = 800, m_h = 600, m_ss = 1;
     double m_time = 0;
     bool m_useBla = true;
+    bool m_boxing = true;
     bool m_dirty = true;            // the view or formula changed since the last pass started
     bool m_colorsDirty = true;
     QString m_paletteName;
+    int m_paletteRevision = -1;
 
     RefState m_ref;                 // uploaded to the graphics card
     long m_nextRefId = 1;

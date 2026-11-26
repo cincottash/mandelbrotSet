@@ -29,10 +29,15 @@ struct PassParams {
     double escapeRadius = 256;
     bool julia = false;
     int power = 2;
+    int formula = 0;              // core::Formula
     bool stripes = false;
     double stripeDensity = 5;
+    int trap = -1;                // orbit trap shape (core::TrapShape), -1 off
+    double trapX = 0, trapY = 0, trapSize = 1;
     bool wideRange = false;       // the extended-range shader (deep zooms)
     bool useBla = true;
+    bool boxing = true;           // fill blocks enclosed by inside pixels without iterating them
+    bool shallowCheck = true;     // shallow views: skip the main cardioid and the period-2 disk
 };
 
 // One render's raw numbers (two float textures) and what it was rendered for.
@@ -52,12 +57,29 @@ struct RawFrame {
     int divisor = 1;              // 1 = full resolution, 4 = a quarter-size preview (set by the caller)
 };
 
+// Buddhabrot: what is counted, and where.
+struct BuddhaParams {
+    double cx = -0.5, cy = 0, scale = 1.25, angle = 0;   // the view (single precision is enough: shallow views)
+    int w = 0, h = 0;
+    int limits[3] = {5000, 500, 50};                     // red, green, blue
+    int minIter = 0;
+    int formula = 0, power = 2;
+    double boxX = -2.2, boxY = -1.6, boxW = 3.2, boxH = 3.2;   // where the random points c are drawn from
+    bool operator==(const BuddhaParams& o) const
+    {
+        return cx == o.cx && cy == o.cy && scale == o.scale && angle == o.angle && w == o.w && h == o.h
+            && limits[0] == o.limits[0] && limits[1] == o.limits[1] && limits[2] == o.limits[2] && minIter == o.minIter
+            && formula == o.formula && power == o.power && boxX == o.boxX && boxY == o.boxY && boxW == o.boxW && boxH == o.boxH;
+    }
+};
+
 // A picture of colors on the graphics card.
 struct ColorTarget {
     unsigned fbo = 0, tex = 0;
     int w = 0, h = 0;
     core::View view;              // the view the picture shows
     bool valid = false;
+    bool fixed = false;           // drawn as it is while the view moves (the picture is on a ball)
 };
 
 class GpuEngine : protected QOpenGLFunctions_4_3_Core {
@@ -81,8 +103,19 @@ public:
     void startPass(RawFrame& frame, const PassParams& p);
     // Works until the budget is spent. True when the whole frame is done.
     bool continuePass(RawFrame& frame, double budgetMs);
-    bool passPending() const { return !m_tiles.empty() || m_tileActive; }
+    bool passPending() const { return !m_tiles.empty() || m_groupActive; }
     double passProgress() const;
+
+    // Buddhabrot: start counting afresh, count more random orbits for about budgetMs (returns how many were
+    // drawn), and color the counts into a picture.
+    void buddhaReset(int w, int h);
+    qint64 buddhaAccumulate(const BuddhaParams& p, double budgetMs);
+    void buddhaColorize(const BuddhaParams& p, const core::ColorParams& c, ColorTarget& target);
+
+    // Movie keyframes: a frame's raw numbers taken from a larger, finer keyframe instead of computed again.
+    // keyCovers(): the keyframe holds the whole frame view with at least minDensity keyframe pixels per frame pixel.
+    bool keyCovers(const RawFrame& key, const core::View& frameView, int outW, int outH, double minDensity) const;
+    bool resample(const RawFrame& key, const core::View& frameView, int outW, int outH, int ss, RawFrame& out);
 
     void setPalette(const QVector<quint32>& rgba);
     void ensureTarget(ColorTarget& t, int w, int h);
@@ -106,8 +139,18 @@ private:
     unsigned compile(const QString& name, const QByteArray& source, unsigned type, QString* error);
     unsigned link(std::initializer_list<unsigned> shaders, QString* error);
     void ensureFrameTextures(RawFrame& f, int w, int h);
-    void dispatchTile(const QRect& r, int budget, bool resume);
+    void dispatchTile(const QRect& r, int slot, int budget, bool resume, int pixelSet);
     void bindPassUniforms();
+    void bloom(ColorTarget& target, const core::ColorParams& c);   // the glow, on the finished colors
+    void sphere(ColorTarget& target, const core::ColorParams& c);  // the picture wrapped onto a ball
+
+    unsigned m_progBloom = 0, m_progSphere = 0, m_progResample = 0, m_progBuddha = 0, m_progBuddhaColor = 0;
+    unsigned m_buddhaHist = 0, m_buddhaMax = 0;
+    int m_buddhaW = 0, m_buddhaH = 0;
+    quint32 m_buddhaSeed = 1;
+    ColorTarget m_scratch;
+    unsigned m_bloomTex[2] = {0, 0}, m_bloomFbo[2] = {0, 0};
+    int m_bloomW = 0, m_bloomH = 0;
 
     bool m_ready = false;
     QString m_renderer;
@@ -117,6 +160,7 @@ private:
     unsigned m_paletteTex = 0;
     int m_refLen = 0;
     bool m_refEscaped = false;
+    QPointF m_refC;
     std::vector<int32_t> m_blaOffset, m_blaCount;
     int m_blaLevels = 0;
 
@@ -127,23 +171,28 @@ private:
     double m_msPerPixel = -1;     // measured; -1 until known
     int m_tileSize = 128;
     unsigned m_passProg = 0;
-    // Passes with many iterations go one tile at a time, in dispatches of at most kChunk iterations per pixel
-    // (each pixel saves its state between them), so no dispatch runs long enough for the driver to reset.
-    unsigned m_state = 0;
-    bool m_chunked = false;
-    bool m_tileActive = false;    // a tile is part way done
-    bool m_tileResume = false;
-    QRect m_tile;
+    // Tiles run in groups, in rounds of dispatches that each do at most kWorkCap pixel-iterations at worst (each
+    // pixel saves its state between rounds), so no dispatch runs long enough for the graphics driver to reset.
+    unsigned m_state = 0, m_blocks = 0, m_progBoxes = 0;
+    QList<QRect> m_group;
+    long long m_groupPixels = 0;
+    bool m_groupActive = false;
+    int m_phase = 0;              // 0 every pixel, 1 block borders, 2 block insides (boxing)
+    bool m_resume = false;
 
 public:
-    static constexpr int kChunk = 20000;              // iterations per pixel per dispatch
-    static constexpr double kWorkCap = 4.0e8;         // most pixel-iterations one batch may need, at worst
+    // Most pixel-iterations one dispatch round may need at worst. Measured on the RTX 4080: 1e10 to 7e10
+    // iterations a second, so a round takes 0.1 to 0.4 s at worst, far under Windows' 2 s driver limit.
+    static constexpr double kWorkCap = 4.0e9;
     static constexpr int kMaxTile = 128;
+    static constexpr int kGroupTiles = 8;             // about 131,000 pixels: enough to fill the graphics card
+    // Boxing flags per tile: 4 big blocks (64 pixels) and 64 small ones (16 pixels), as the shaders expect.
+    static constexpr int kBlocksPerTile = 4 + 64;
     void setChunkForTests(int iterations) { m_chunkOverride = iterations; }   // 0 = normal
 
 private:
     int m_chunkOverride = 0;
-    int chunk() const { return m_chunkOverride > 0 ? m_chunkOverride : kChunk; }
+    int iterationsPerDispatch(long long groupPixels) const;
 };
 
 }  // namespace render

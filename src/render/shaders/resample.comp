@@ -1,0 +1,53 @@
+// Movie frames from a keyframe: each raw sample of the frame takes the keyframe's raw numbers at the same point of
+// the plane (the keyframe covers a little more than the frame, at a higher resolution). Escape times, distances and
+// normals are blended between the four nearest keyframe samples when all four escaped with escape times close
+// together; anything else (the inside, chaotic spots, angles, stripes, traps) takes the nearest sample.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(rgba32f, binding = 0) uniform writeonly image2D uOut0;
+layout(rgba32f, binding = 1) uniform writeonly image2D uOut1;
+uniform sampler2D uKey0;
+uniform sampler2D uKey1;
+uniform ivec2 uKeySize;       // keyframe raw size
+uniform ivec2 uSize;          // frame raw size
+// Frame view units q (u right, v up, -1..1 across the height) to keyframe view units: w = M q + T, with M = s R(a).
+uniform vec2 uM;              // (s cos a, s sin a)
+uniform vec2 uT;
+uniform float uDeScale;       // keyframe raw pixels per frame raw pixel (distances are in raw pixels)
+uniform vec2 uNormalRot;      // (cos, sin) turning keyframe screen directions into frame ones
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= uSize.x || p.y >= uSize.y) return;
+    vec2 q = (vec2(p) + 0.5 - 0.5 * vec2(uSize)) * (2.0 / float(uSize.y));
+    q.y = -q.y;
+    vec2 w = vec2(uM.x * q.x - uM.y * q.y, uM.y * q.x + uM.x * q.y) + uT;
+    // Keyframe texel coordinates (texel centers at +0.5), row 0 at the top.
+    vec2 k = vec2(0.5 * float(uKeySize.x) + w.x * 0.5 * float(uKeySize.y), 0.5 * float(uKeySize.y) - w.y * 0.5 * float(uKeySize.y));
+    ivec2 nearest = clamp(ivec2(floor(k)), ivec2(0), uKeySize - 1);
+    vec2 f = k - 0.5;
+    ivec2 i0 = clamp(ivec2(floor(f)), ivec2(0), uKeySize - 1);
+    ivec2 i1 = min(i0 + 1, uKeySize - 1);
+    vec2 t = clamp(f - vec2(floor(f)), 0.0, 1.0);
+    vec4 a = texelFetch(uKey0, i0, 0), b = texelFetch(uKey0, ivec2(i1.x, i0.y), 0);
+    vec4 c = texelFetch(uKey0, ivec2(i0.x, i1.y), 0), d = texelFetch(uKey0, i1, 0);
+    vec4 r0;
+    float lo = min(min(a.x, b.x), min(c.x, d.x)), hi = max(max(a.x, b.x), max(c.x, d.x));
+    // Blend only where the escape time is smooth: in chaotic spots a blend would wash out the filaments.
+    if (lo >= 0.0 && hi - lo < 1.0) {
+        r0 = mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+        float nl = length(r0.zw);
+        if (nl > 0.0) r0.zw /= nl;
+    } else {
+        r0 = texelFetch(uKey0, nearest, 0);
+    }
+    vec4 r1 = texelFetch(uKey1, nearest, 0);
+    if (r0.x >= 0.0) {
+        r0.y /= uDeScale;
+        r0.zw = vec2(uNormalRot.x * r0.z - uNormalRot.y * r0.w, uNormalRot.y * r0.z + uNormalRot.x * r0.w);
+    }
+    imageStore(uOut0, p, r0);
+    imageStore(uOut1, p, r1);
+}

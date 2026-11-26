@@ -9,7 +9,8 @@
 
 namespace core {
 
-enum class ColorStyle { Gradient = 0, SineWaves = 1, Moire = 2, Distance = 3, Stripes = 4, Angle = 5 };
+enum class ColorStyle { Gradient = 0, SineWaves = 1, Moire = 2, Distance = 3, Stripes = 4, Angle = 5, OrbitTrap = 6 };
+enum class TrapShape { Point = 0, Cross = 1, Circle = 2 };
 enum class InteriorStyle { Solid = 0, Diagonal = 1, Depth = 2 };
 
 struct ColorParams {
@@ -39,12 +40,25 @@ struct ColorParams {
 
     double stripeDensity = 5.0;    // needs a new render
 
+    // Orbit trap (needs a new render): the closest each orbit comes to a point, a cross or a circle.
+    int trapShape = int(TrapShape::Cross);
+    double trapX = 0.0, trapY = 0.0, trapSize = 1.0;   // the shape's center; the circle's radius
+
     int interiorStyle = int(InteriorStyle::Solid);
     QColor interiorColor{0x00, 0x00, 0x00};
     QColor interiorColor2{0xFF, 0x20, 0xFF};
 
     double hue = 0.0, saturation = 1.0, brightness = 0.0, contrast = 1.0, gamma = 1.0;
     double vignette = 0.0, grain = 0.0;
+    double bloom = 0.0, bloomSize = 2.5, bloomThreshold = 0.6;   // bloomSize: % of the picture's height
+
+    // Buddhabrot coloring: the Nebulabrot (red, green, blue from the three iteration limits) or the palette.
+    int buddhaNebula = 1;
+    double buddhaExposure = 1.0, buddhaGamma = 0.5;
+
+    // The picture wrapped onto a ball (core/Sphere.h); size 0 = flat.
+    double sphereSize = 0.0, sphereShade = 0.6, sphereShine = 0.5;
+    QColor sphereBackground{0x0B, 0x0D, 0x12};
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject& o);
@@ -71,6 +85,7 @@ const QList<SliderSpec>& sliderSpecs();
 const SliderSpec* sliderSpec(const QString& key);
 QStringList styleNames();          // index = ColorStyle
 QStringList interiorStyleNames();  // index = InteriorStyle
+QStringList trapShapeNames();      // index = TrapShape
 QStringList colorScaleNames();
 
 // Ready-made looks: a full set of color settings each.

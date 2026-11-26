@@ -1,5 +1,7 @@
 #include "GpuEngine.h"
 
+#include "core/Bloom.h"
+
 #include <QFile>
 #include <QOpenGLContext>
 #include <QRect>
@@ -95,7 +97,9 @@ bool GpuEngine::init(QString* error)
     const QByteArray vert = loadShader(QStringLiteral("fullscreen.vert"));
     const QByteArray color = loadShader(QStringLiteral("colorize.frag"));
     const QByteArray disp = loadShader(QStringLiteral("display.frag"));
-    if (iter.isEmpty() || vert.isEmpty() || color.isEmpty() || disp.isEmpty()) {
+    const QByteArray bloomSrc = loadShader(QStringLiteral("bloom.frag"));
+    const QByteArray sphereSrc = loadShader(QStringLiteral("sphere.frag"));
+    if (iter.isEmpty() || vert.isEmpty() || color.isEmpty() || disp.isEmpty() || bloomSrc.isEmpty() || sphereSrc.isEmpty()) {
         if (error) *error = QStringLiteral("The shader files are missing from the program.");
         return false;
     }
@@ -105,6 +109,12 @@ bool GpuEngine::init(QString* error)
     s = m_progF ? compile(QStringLiteral("iterate (wide)"), head + "#define TIER_X\n" + iter, GL_COMPUTE_SHADER, &err) : 0;
     m_progX = s ? link({s}, &err) : 0;
     if (m_progX) {
+        const QByteArray boxes = loadShader(QStringLiteral("boxes.comp"));
+        s = boxes.isEmpty() ? 0 : compile(QStringLiteral("boxes"), head + boxes, GL_COMPUTE_SHADER, &err);
+        m_progBoxes = s ? link({s}, &err) : 0;
+        if (!m_progBoxes) m_progX = 0;   // reports the error below
+    }
+    if (m_progX) {
         const unsigned v = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
         const unsigned c = v ? compile(QStringLiteral("colorize"), head + color, GL_FRAGMENT_SHADER, &err) : 0;
         m_progColor = c ? link({v, c}, &err) : 0;
@@ -113,6 +123,36 @@ bool GpuEngine::init(QString* error)
         const unsigned v = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
         const unsigned d = v ? compile(QStringLiteral("display"), head + disp, GL_FRAGMENT_SHADER, &err) : 0;
         m_progDisplay = d ? link({v, d}, &err) : 0;
+    }
+    if (m_progDisplay) {
+        const unsigned v = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
+        const unsigned b = v ? compile(QStringLiteral("bloom"), head + bloomSrc, GL_FRAGMENT_SHADER, &err) : 0;
+        m_progBloom = b ? link({v, b}, &err) : 0;
+        if (m_progBloom) {
+            const unsigned v2 = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
+            const unsigned sp = v2 ? compile(QStringLiteral("sphere"), head + sphereSrc, GL_FRAGMENT_SHADER, &err) : 0;
+            m_progSphere = sp ? link({v2, sp}, &err) : 0;
+        }
+        if (m_progSphere) {
+            const unsigned rs = compile(QStringLiteral("resample"), head + loadShader(QStringLiteral("resample.comp")),
+                                        GL_COMPUTE_SHADER, &err);
+            m_progResample = rs ? link({rs}, &err) : 0;
+        }
+        if (m_progResample) {
+            const unsigned bc = compile(QStringLiteral("buddha"), head + loadShader(QStringLiteral("buddha.comp")),
+                                        GL_COMPUTE_SHADER, &err);
+            m_progBuddha = bc ? link({bc}, &err) : 0;
+        }
+        if (m_progBuddha) {
+            const unsigned v3 = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
+            const unsigned bf = v3 ? compile(QStringLiteral("buddha colors"), head + loadShader(QStringLiteral("buddha.frag")),
+                                             GL_FRAGMENT_SHADER, &err) : 0;
+            m_progBuddhaColor = bf ? link({v3, bf}, &err) : 0;
+        }
+        if (!m_progBloom || !m_progSphere || !m_progResample || !m_progBuddha || !m_progBuddhaColor) {
+            glDeleteProgram(m_progDisplay);
+            m_progDisplay = 0;
+        }
     }
     if (!m_progDisplay) {
         if (error) *error = err;
@@ -135,7 +175,10 @@ bool GpuEngine::init(QString* error)
     }
     glGenBuffers(1, &m_state);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_state);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(kMaxTile) * kMaxTile * 5 * 16, nullptr, GL_DYNAMIC_COPY);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(kGroupTiles) * kMaxTile * kMaxTile * 5 * 16, nullptr, GL_DYNAMIC_COPY);
+    glGenBuffers(1, &m_blocks);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_blocks);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(kGroupTiles) * kBlocksPerTile * 4, nullptr, GL_DYNAMIC_COPY);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     glGenTextures(1, &m_paletteTex);
     glBindTexture(GL_TEXTURE_2D, m_paletteTex);
@@ -153,9 +196,20 @@ bool GpuEngine::init(QString* error)
 void GpuEngine::release()
 {
     if (!QOpenGLContext::currentContext()) return;
-    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay})
+    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay, &m_progBloom, &m_progSphere, &m_progResample,
+                        &m_progBuddha, &m_progBuddhaColor})
         if (*p) { glDeleteProgram(*p); *p = 0; }
-    for (unsigned* b : {&m_refF, &m_refX, &m_blaF, &m_blaX, &m_stats, &m_state})
+    for (unsigned* b : {&m_buddhaHist, &m_buddhaMax})
+        if (*b) { glDeleteBuffers(1, b); *b = 0; }
+    m_buddhaW = m_buddhaH = 0;
+    freeTarget(m_scratch);
+    for (int i = 0; i < 2; ++i) {
+        if (m_bloomFbo[i]) { glDeleteFramebuffers(1, &m_bloomFbo[i]); m_bloomFbo[i] = 0; }
+        if (m_bloomTex[i]) { glDeleteTextures(1, &m_bloomTex[i]); m_bloomTex[i] = 0; }
+    }
+    m_bloomW = m_bloomH = 0;
+    if (m_progBoxes) { glDeleteProgram(m_progBoxes); m_progBoxes = 0; }
+    for (unsigned* b : {&m_refF, &m_refX, &m_blaF, &m_blaX, &m_stats, &m_state, &m_blocks})
         if (*b) { glDeleteBuffers(1, b); *b = 0; }
     if (m_vao) { glDeleteVertexArrays(1, &m_vao); m_vao = 0; }
     if (m_paletteTex) { glDeleteTextures(1, &m_paletteTex); m_paletteTex = 0; }
@@ -181,6 +235,7 @@ void GpuEngine::uploadReference(const core::RefOrbit& orbit, const core::BlaTabl
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     m_refLen = orbit.length;
     m_refEscaped = orbit.escaped;
+    m_refC = QPointF(orbit.request.x.toDouble(), orbit.request.y.toDouble());
     m_blaOffset = bla.offset;
     m_blaCount = bla.count;
     m_blaLevels = std::min(bla.levels, 32);
@@ -206,6 +261,169 @@ void GpuEngine::ensureFrameTextures(RawFrame& f, int w, int h)
     f.tex1 = t[1];
     f.allocW = aw;
     f.allocH = ah;
+}
+
+bool GpuEngine::resample(const RawFrame& key, const core::View& frameView, int outW, int outH, int ss, RawFrame& out)
+{
+    if (!m_ready || !key.tex0 || key.rawW < 2 || key.rawH < 2) return false;
+    ss = std::max(1, ss);
+    const int rw = std::max(1, outW) * ss, rh = std::max(1, outH) * ss;
+    // Frame view units to keyframe view units: w = s R(a) q + T.
+    const double s = (frameView.scale / key.view.scale).toDouble();
+    const double a = frameView.angle - key.view.angle;
+    const core::ComplexExp off = frameView.centerOffsetFrom(key.view.cx, key.view.cy) * (core::FloatExp(1.0) / key.view.scale);
+    const std::complex<double> d = off.toComplex() * std::polar(1.0, -key.view.angle);
+    if (!std::isfinite(s) || !std::isfinite(d.real()) || !std::isfinite(d.imag())) return false;
+    ensureFrameTextures(out, rw, rh);
+    out.view = frameView;
+    out.pass = key.pass;
+    out.pass.view = frameView;
+    out.pass.outW = outW;
+    out.pass.outH = outH;
+    out.pass.ss = ss;
+    out.ss = ss;
+    out.outW = outW;
+    out.outH = outH;
+    out.rawW = rw;
+    out.rawH = rh;
+    out.maxIterations = key.maxIterations;
+    out.stats = key.stats;
+    out.complete = true;
+    glUseProgram(m_progResample);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progResample, n); };
+    glBindImageTexture(0, out.tex0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+    glBindImageTexture(1, out.tex1, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, key.tex0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, key.tex1);
+    glUniform1i(loc("uKey0"), 0);
+    glUniform1i(loc("uKey1"), 1);
+    glUniform2i(loc("uKeySize"), key.rawW, key.rawH);
+    glUniform2i(loc("uSize"), rw, rh);
+    glUniform2f(loc("uM"), float(s * std::cos(a)), float(s * std::sin(a)));
+    glUniform2f(loc("uT"), float(d.real()), float(d.imag()));
+    glUniform1f(loc("uDeScale"), float(s * double(key.rawH) / double(rh)));
+    glUniform2f(loc("uNormalRot"), float(std::cos(-a)), float(std::sin(-a)));
+    glDispatchCompute(GLuint((rw + 7) / 8), GLuint((rh + 7) / 8), 1);
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    return true;
+}
+
+void GpuEngine::buddhaReset(int w, int h)
+{
+    w = std::max(w, 1);
+    h = std::max(h, 1);
+    if (!m_buddhaHist) glGenBuffers(1, &m_buddhaHist);
+    if (!m_buddhaMax) glGenBuffers(1, &m_buddhaMax);
+    const quint32 zero = 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_buddhaHist);
+    if (w != m_buddhaW || h != m_buddhaH) {
+        glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(w) * h * 3 * 4, nullptr, GL_DYNAMIC_COPY);
+        m_buddhaW = w;
+        m_buddhaH = h;
+    }
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &zero);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_buddhaMax);
+    const quint32 zeros[4] = {0, 0, 0, 0};
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(zeros), zeros, GL_DYNAMIC_COPY);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+}
+
+qint64 GpuEngine::buddhaAccumulate(const BuddhaParams& p, double budgetMs)
+{
+    if (!m_ready || !m_buddhaHist || p.w != m_buddhaW || p.h != m_buddhaH) return 0;
+    const int maxLimit = std::max({p.limits[0], p.limits[1], p.limits[2], 1});
+    // At worst every orbit runs the limit twice: keep one dispatch under the same work cap as the main renderer.
+    const qint64 perDispatch = std::clamp<qint64>(qint64(kWorkCap / 4.0 / (2.0 * maxLimit)) / 64 * 64, 4096, 1 << 22);
+    glUseProgram(m_progBuddha);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progBuddha, n); };
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_buddhaHist);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_buddhaMax);
+    glUniform2i(loc("uSize"), p.w, p.h);
+    glUniform2f(loc("uCenter"), float(p.cx), float(p.cy));
+    glUniform1f(loc("uInvScale"), float(1.0 / p.scale));
+    glUniform2f(loc("uRot"), float(std::cos(-p.angle)), float(std::sin(-p.angle)));
+    glUniform3i(loc("uLimits"), p.limits[0], p.limits[1], p.limits[2]);
+    glUniform1i(loc("uMaxLimit"), maxLimit);
+    glUniform1i(loc("uMinIter"), p.minIter);
+    glUniform1i(loc("uFormula"), p.formula);
+    glUniform1i(loc("uPower"), p.power);
+    glUniform2f(loc("uBoxMin"), float(p.boxX), float(p.boxY));
+    glUniform2f(loc("uBoxSize"), float(p.boxW), float(p.boxH));
+    glUniform1i(loc("uSkipBulbs"), p.formula == 0 && p.power == 2 ? 1 : 0);
+    QElapsedTimer t;
+    t.start();
+    qint64 done = 0;
+    do {
+        glUniform1ui(loc("uSeed"), m_buddhaSeed++ * 0x9E3779B9u);
+        glDispatchCompute(GLuint(perDispatch / 64), 1, 1);
+        glFinish();
+        done += perDispatch;
+    } while (t.nsecsElapsed() / 1e6 < budgetMs * 0.8);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    glUseProgram(0);
+    return done;
+}
+
+void GpuEngine::buddhaColorize(const BuddhaParams& p, const core::ColorParams& c, ColorTarget& target)
+{
+    if (!m_ready || !m_buddhaHist || p.w != m_buddhaW || p.h != m_buddhaH) return;
+    ensureTarget(target, p.w, p.h);
+    GLint prevFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
+    glViewport(0, 0, target.w, target.h);
+    glDisable(GL_BLEND);
+    glUseProgram(m_progBuddhaColor);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progBuddhaColor, n); };
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_buddhaHist);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_buddhaMax);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_paletteTex);
+    glUniform1i(loc("uPalette"), 0);
+    glUniform2i(loc("uSize"), p.w, p.h);
+    glUniform1i(loc("uNebula"), c.buddhaNebula ? 1 : 0);
+    glUniform1f(loc("uExposure"), float(c.buddhaExposure));
+    glUniform1f(loc("uGamma"), float(c.buddhaGamma));
+    glUniform1f(loc("uDensity"), float(c.density));
+    glUniform1f(loc("uOffset"), float(c.offset));
+    glUniform3f(loc("uBg"), float(c.interiorColor.redF()), float(c.interiorColor.greenF()), float(c.interiorColor.blueF()));
+    glBindVertexArray(m_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    if (c.sphereSize > 0) sphere(target, c);
+    if (c.bloom > 0) bloom(target, c);
+    glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
+    target.valid = true;
+    target.fixed = c.sphereSize > 0;
+}
+
+bool GpuEngine::keyCovers(const RawFrame& key, const core::View& frameView, int outW, int outH, double minDensity) const
+{
+    if (!key.tex0 || key.rawW < 2) return false;
+    const double s = (frameView.scale / key.view.scale).toDouble();
+    if (!std::isfinite(s) || s <= 0) return false;
+    // Keyframe raw pixels per frame (output) pixel: the frame spans s keyframe heights' worth of the plane.
+    const double density = double(key.rawH) * s / double(outH);
+    if (density < minDensity || density > minDensity * 8.0) return false;
+    const double a = frameView.angle - key.view.angle;
+    const core::ComplexExp off = frameView.centerOffsetFrom(key.view.cx, key.view.cy) * (core::FloatExp(1.0) / key.view.scale);
+    const std::complex<double> d = off.toComplex() * std::polar(1.0, -key.view.angle);
+    const double aspect = double(outW) / double(std::max(outH, 1)), keyAspect = double(key.rawW) / double(key.rawH);
+    for (double cu : {-aspect, aspect})
+        for (double cv : {-1.0, 1.0}) {
+            const std::complex<double> w = s * std::polar(1.0, a) * std::complex<double>(cu, cv) + d;
+            if (std::abs(w.real()) > keyAspect * 0.995 || std::abs(w.imag()) > 0.995) return false;
+        }
+    return true;
 }
 
 void GpuEngine::freeFrame(RawFrame& f)
@@ -242,9 +460,8 @@ void GpuEngine::startPass(RawFrame& frame, const PassParams& p)
 
     // Big tiles for quick views, small ones when every pixel takes long (keeps each slice short, so the screen and
     // the graphics driver never wait long).
-    m_chunked = p.maxIterations > chunk();
-    m_tileActive = false;
-    m_tileResume = false;
+    m_groupActive = false;
+    m_resume = false;
     m_tileSize = kMaxTile;
     m_tiles.clear();
     QList<QRect> tiles;
@@ -295,8 +512,9 @@ void GpuEngine::bindPassUniforms()
     glUniform1i(loc("uRefLen"), m_refLen);
     glUniform1i(loc("uRefEscaped"), m_refEscaped ? 1 : 0);
     glUniform1i(loc("uPower"), p.power);
+    glUniform1i(loc("uFormula"), p.formula);
     glUniform1i(loc("uJulia"), p.julia ? 1 : 0);
-    const int levels = (p.useBla && p.power == 2) ? m_blaLevels : 0;
+    const int levels = (p.useBla && p.power == 2 && p.formula == 0) ? m_blaLevels : 0;
     glUniform1i(loc("uBlaLevels"), levels);
     if (levels > 0) {
         glUniform1iv(loc("uBlaOffset"), levels, m_blaOffset.data());
@@ -304,15 +522,39 @@ void GpuEngine::bindPassUniforms()
     }
     glUniform1i(loc("uStripe"), p.stripes ? 1 : 0);
     glUniform1f(loc("uStripeDensity"), float(p.stripeDensity));
+    glUniform1i(loc("uTrap"), p.trap);
+    glUniform2f(loc("uTrapC"), float(p.trapX), float(p.trapY));
+    glUniform1f(loc("uTrapR"), float(p.trapSize));
+    // Shallow Mandelbrot views (power 2) skip the main cardioid and the period-2 disk: single precision tells them
+    // apart from the edge only while a pixel is far larger than its rounding.
+    const bool shallow = !p.julia && p.power == 2 && p.formula == 0 && !p.wideRange && p.shallowCheck
+                         && p.view.scale.log2Abs() > -10.0;
+    glUniform1i(loc("uShallowCheck"), shallow ? 1 : 0);
+    glUniform2f(loc("uRefC"), float(m_refC.x()), float(m_refC.y()));
 }
 
-void GpuEngine::dispatchTile(const QRect& r, int budget, bool resume)
+void GpuEngine::dispatchTile(const QRect& r, int slot, int budget, bool resume, int pixelSet)
 {
-    glUniform2i(glGetUniformLocation(m_passProg, "uOrigin"), r.x(), r.y());
-    glUniform2i(glGetUniformLocation(m_passProg, "uTileSize"), r.width(), r.height());
-    glUniform1i(glGetUniformLocation(m_passProg, "uIterBudget"), budget);
-    glUniform1i(glGetUniformLocation(m_passProg, "uResume"), resume ? 1 : 0);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_passProg, n); };
+    glUniform2i(loc("uOrigin"), r.x(), r.y());
+    glUniform2i(loc("uTileSize"), r.width(), r.height());
+    glUniform1i(loc("uIterBudget"), budget);
+    glUniform1i(loc("uResume"), resume ? 1 : 0);
+    glUniform1i(loc("uStateBase"), slot * kMaxTile * kMaxTile);
+    glUniform1i(loc("uPixelSet"), pixelSet);
+    glUniform1i(loc("uBlockBase"), slot * kBlocksPerTile);
     glDispatchCompute(GLuint((r.width() + 7) / 8), GLuint((r.height() + 7) / 8), 1);
+}
+
+int GpuEngine::iterationsPerDispatch(long long groupPixels) const
+{
+    if (m_chunkOverride > 0) return m_chunkOverride;
+    // At worst every active pixel of the group runs the whole budget: keep that under a fixed amount of work, so
+    // one dispatch never keeps the graphics card busy long enough for Windows to reset its driver (about 2 s).
+    // Boxing's border phases touch only a share of the pixels (64-pixel borders 1/16, 16-pixel borders 3/16).
+    const double share = m_phase == 1 ? 0.07 : m_phase == 2 ? 0.2 : 1.0;
+    const double perPixel = kWorkCap / (double(std::max<long long>(groupPixels, 1)) * share);
+    return int(std::clamp<double>(perPixel, 1000.0, double(m_pass.maxIterations)));
 }
 
 bool GpuEngine::continuePass(RawFrame& frame, double budgetMs)
@@ -331,22 +573,33 @@ bool GpuEngine::continuePass(RawFrame& frame, double budgetMs)
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_blaX);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_stats);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_state);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, m_blocks);
 
-    // Many iterations: one tile at a time, in short dispatches that each pixel resumes from its saved state.
-    while (m_chunked && (m_tileActive || !m_tiles.empty())) {
-        if (double(timer.nsecsElapsed()) / 1e6 >= budgetMs) break;
-        if (!m_tileActive) {
-            QRect r = m_tiles.front();
-            m_tiles.pop_front();
-            if (r.width() > kMaxTile || r.height() > kMaxTile) {   // never bigger than the saved state holds
-                for (int y = r.top(); y <= r.bottom(); y += kMaxTile)
-                    for (int x = r.left(); x <= r.right(); x += kMaxTile)
-                        m_tiles.push_front(QRect(x, y, std::min(kMaxTile, r.right() + 1 - x), std::min(kMaxTile, r.bottom() + 1 - y)));
-                continue;
+    // Tiles go in groups (enough pixels to fill the graphics card), in rounds of dispatches that each run at most
+    // a fixed amount of work; unfinished pixels resume from their saved state in the next round. With boxing, a
+    // group first does its blocks' borders, then marks the blocks whose border is all inside, then the rest.
+    bool didRound = false;
+    while (m_groupActive || !m_tiles.empty()) {
+        if (didRound && double(timer.nsecsElapsed()) / 1e6 >= budgetMs) break;
+        if (!m_groupActive) {
+            m_group.clear();
+            m_groupPixels = 0;
+            while (!m_tiles.empty() && m_group.size() < kGroupTiles) {
+                const QRect r = m_tiles.front();
+                m_tiles.pop_front();
+                if (r.width() > kMaxTile || r.height() > kMaxTile) {   // never bigger than a state slot holds
+                    for (int y = r.top(); y <= r.bottom(); y += kMaxTile)
+                        for (int x = r.left(); x <= r.right(); x += kMaxTile)
+                            m_tiles.push_front(QRect(x, y, std::min(kMaxTile, r.right() + 1 - x), std::min(kMaxTile, r.bottom() + 1 - y)));
+                    continue;
+                }
+                m_group << r;
+                m_groupPixels += qint64(r.width()) * r.height();
             }
-            m_tile = r;
-            m_tileActive = true;
-            m_tileResume = false;
+            if (m_group.isEmpty()) break;
+            m_groupActive = true;
+            m_phase = m_pass.boxing ? 1 : 0;
+            m_resume = false;
         }
         const quint32 zero = 0;
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_stats);
@@ -354,60 +607,45 @@ bool GpuEngine::continuePass(RawFrame& frame, double budgetMs)
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
         QElapsedTimer t;
         t.start();
-        dispatchTile(m_tile, chunk(), m_tileResume);
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+        const int budget = iterationsPerDispatch(m_groupPixels);
+        for (int i = 0; i < m_group.size(); ++i) dispatchTile(m_group[i], i, budget, m_resume, m_phase);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         quint32 unfinished = 0;
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_stats);
         glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, offsetof(PassStats, unfinished), sizeof(unfinished), &unfinished);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
         frame.gpuMs += double(t.nsecsElapsed()) / 1e6;
-        if (unfinished == 0) {
-            m_tileActive = false;
-            m_donePixels += qint64(m_tile.width()) * m_tile.height();
-        } else {
-            m_tileResume = true;
+        didRound = true;
+        if (unfinished > 0) {
+            m_resume = true;
+            continue;
         }
-    }
-
-    while (!m_chunked && !m_tiles.empty()) {
-        const double left = budgetMs - double(timer.nsecsElapsed()) / 1e6;
-        if (left <= 0) break;
-        // A batch of tiles that should fit in the time left (one tile while the speed isn't known yet).
-        QList<QRect> batch;
-        long long pixels = 0;
-        while (!m_tiles.empty()) {
-            QRect r = m_tiles.front();
-            if (r.width() > m_tileSize || r.height() > m_tileSize) {
-                // Tiles got smaller after a slow one: split this one first.
-                m_tiles.pop_front();
-                for (int y = r.top(); y <= r.bottom(); y += m_tileSize)
-                    for (int x = r.left(); x <= r.right(); x += m_tileSize)
-                        m_tiles.push_front(QRect(x, y, std::min(m_tileSize, r.right() + 1 - x),
-                                                 std::min(m_tileSize, r.bottom() + 1 - y)));
-                continue;
+        if (m_phase == 1 || m_phase == 2) {
+            // Borders done: mark the blocks whose border is all inside, then go on with the next pixels.
+            glUseProgram(m_progBoxes);
+            auto loc = [&](const char* n) { return glGetUniformLocation(m_progBoxes, n); };
+            glBindImageTexture(0, frame.tex0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+            glUniform2i(loc("uSize"), frame.rawW, frame.rawH);
+            glUniform1i(loc("uLevel"), m_phase);
+            for (int i = 0; i < m_group.size(); ++i) {
+                const QRect& r = m_group[i];
+                glUniform2i(loc("uOrigin"), r.x(), r.y());
+                glUniform2i(loc("uTileSize"), r.width(), r.height());
+                glUniform1i(loc("uBlockBase"), i * kBlocksPerTile);
+                glDispatchCompute(1, 1, 1);   // at most 64 blocks a level
             }
-            const long long px = qint64(r.width()) * r.height();
-            // The estimate comes from the tiles done so far, and the next ones may be far slower (all inside):
-            // a batch's worst case (every pixel running the full limit) also stays under a fixed amount of work.
-            const bool tooMuchAtWorst = double(pixels + px) * double(m_pass.maxIterations) > kWorkCap;
-            if (!batch.isEmpty() && (m_msPerPixel < 0 || double(pixels + px) * m_msPerPixel > left || tooMuchAtWorst)) break;
-            batch << r;
-            pixels += px;
-            m_tiles.pop_front();
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+            glUseProgram(m_passProg);
+            glBindImageTexture(0, frame.tex0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+            ++m_phase;
+            m_resume = false;
+            continue;
         }
-        QElapsedTimer t;
-        t.start();
-        for (const QRect& r : batch) dispatchTile(r, m_pass.maxIterations, false);
-        glFinish();
-        const double ms = double(t.nsecsElapsed()) / 1e6;
-        frame.gpuMs += ms;
-        m_donePixels += pixels;
-        const double perPx = ms / double(std::max<long long>(pixels, 1));
-        m_msPerPixel = m_msPerPixel < 0 ? perPx : 0.5 * m_msPerPixel + 0.5 * perPx;
-        if (batch.size() == 1 && ms > 120 && m_tileSize > 16) m_tileSize /= 2;
+        m_donePixels += m_groupPixels;
+        m_groupActive = false;
     }
     glUseProgram(0);
-    if (!m_tiles.empty() || m_tileActive) return false;
+    if (!m_tiles.empty() || m_groupActive) return false;
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_stats);
     glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(PassStats), &frame.stats);
@@ -464,6 +702,7 @@ void GpuEngine::colorize(const RawFrame& raw, const core::ColorParams& c, double
                          QSize whole, QPoint origin)
 {
     if (!m_ready || !raw.tex0) return;
+    const bool onePiece = whole.isEmpty();
     ensureTarget(target, raw.outW, raw.outH);
     GLint prevFbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
@@ -525,9 +764,94 @@ void GpuEngine::colorize(const RawFrame& raw, const core::ColorParams& c, double
         glActiveTexture(GLenum(GL_TEXTURE0 + unit));
         glBindTexture(GL_TEXTURE_2D, 0);
     }
+    // A picture drawn in pieces gets its ball and bloom once whole (on the CPU, RenderCore::renderImage).
+    if (c.sphereSize > 0 && onePiece) sphere(target, c);
+    if (c.bloom > 0 && onePiece) bloom(target, c);
     glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
     target.view = raw.view;
     target.valid = true;
+    target.fixed = c.sphereSize > 0;
+}
+
+void GpuEngine::sphere(ColorTarget& target, const core::ColorParams& c)
+{
+    ensureTarget(m_scratch, target.w, target.h);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_scratch.fbo);
+    glViewport(0, 0, target.w, target.h);
+    glUseProgram(m_progSphere);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progSphere, n); };
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, target.tex);
+    glUniform1i(loc("uSrc"), 0);
+    glUniform2i(loc("uSize"), target.w, target.h);
+    glUniform1f(loc("uRadius"), float(c.sphereSize * target.h / 2.0));
+    const double a = c.lightAngle * M_PI / 180.0, h = c.lightHeight * M_PI / 180.0;
+    glUniform3f(loc("uLight"), float(std::cos(a) * std::cos(h)), float(std::sin(a) * std::cos(h)), float(std::sin(h)));
+    glUniform1f(loc("uShade"), float(c.sphereShade));
+    glUniform1f(loc("uShine"), float(c.sphereShine));
+    glUniform3f(loc("uBg"), float(c.sphereBackground.redF()), float(c.sphereBackground.greenF()), float(c.sphereBackground.blueF()));
+    glBindVertexArray(m_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_scratch.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target.fbo);
+    glBlitFramebuffer(0, 0, target.w, target.h, 0, 0, target.w, target.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
+}
+
+void GpuEngine::bloom(ColorTarget& target, const core::ColorParams& c)
+{
+    const core::BloomPlan p = core::bloomPlan(target.w, target.h, c.bloomSize);
+    if (m_bloomW != p.smallW || m_bloomH != p.smallH) {
+        for (int i = 0; i < 2; ++i) {
+            if (m_bloomFbo[i]) glDeleteFramebuffers(1, &m_bloomFbo[i]);
+            if (m_bloomTex[i]) glDeleteTextures(1, &m_bloomTex[i]);
+            glGenTextures(1, &m_bloomTex[i]);
+            glBindTexture(GL_TEXTURE_2D, m_bloomTex[i]);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, p.smallW, p.smallH);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glGenFramebuffers(1, &m_bloomFbo[i]);
+            glBindFramebuffer(GL_FRAMEBUFFER, m_bloomFbo[i]);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_bloomTex[i], 0);
+        }
+        glBindTexture(GL_TEXTURE_2D, 0);
+        m_bloomW = p.smallW;
+        m_bloomH = p.smallH;
+    }
+    glUseProgram(m_progBloom);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progBloom, n); };
+    glUniform1i(loc("uSrc"), 0);
+    glUniform1i(loc("uFactor"), p.factor);
+    glUniform1f(loc("uThreshold"), float(c.bloomThreshold));
+    glUniform1f(loc("uSigma"), float(p.sigma));
+    glUniform1i(loc("uRadius"), p.radius);
+    glUniform1f(loc("uStrength"), float(c.bloom));
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(m_vao);
+    auto pass = [&](int mode, unsigned src, QSize srcSize, unsigned fbo, QSize outSize, QPoint dir) {
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, outSize.width(), outSize.height());
+        glBindTexture(GL_TEXTURE_2D, src);
+        glUniform1i(loc("uMode"), mode);
+        glUniform2i(loc("uSrcSize"), srcSize.width(), srcSize.height());
+        glUniform2i(loc("uDir"), dir.x(), dir.y());
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    };
+    const QSize full(target.w, target.h), small(p.smallW, p.smallH);
+    pass(0, target.tex, full, m_bloomFbo[0], small, {});
+    pass(1, m_bloomTex[0], small, m_bloomFbo[1], small, {1, 0});
+    pass(1, m_bloomTex[1], small, m_bloomFbo[0], small, {0, 1});
+    // Screen blend: picture + glow - picture * glow.
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
+    pass(2, m_bloomTex[0], small, target.fbo, full, {});
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
 }
 
 void GpuEngine::display(const ColorTarget& picture, const core::View& cur, int screenW, int screenH, const QColor& bg)
@@ -538,8 +862,9 @@ void GpuEngine::display(const ColorTarget& picture, const core::View& cur, int s
         clear(screenW, screenH, bg);
         return;
     }
-    // q_old = M q_new + T, with M = (s1 / s0) R(a1 - a0) and T = R(-a0) (c1 - c0) / s0.
-    const core::View& old = picture.view;
+    // q_old = M q_new + T, with M = (s1 / s0) R(a1 - a0) and T = R(-a0) (c1 - c0) / s0. A ball stays where it is
+    // (its picture changes on it with the next render).
+    const core::View& old = picture.fixed ? cur : picture.view;
     const double ratio = (cur.scale / old.scale).toDouble();
     const double da = cur.angle - old.angle;
     const core::ComplexExp dcen = cur.centerOffsetFrom(old.cx, old.cy) * (core::FloatExp(1.0) / old.scale);

@@ -50,6 +50,9 @@ public:
     bool autopilot() const { return m_autopilot; }
     void setAutopilotSpeed(double factorPerSecond) { m_autoRate = std::log(std::clamp(factorPerSecond, 1.01, 16.0)); }
     double autopilotSpeed() const { return std::exp(m_autoRate); }
+    // Pause: the autopilot and color cycling stop where they are and go on from there on Resume.
+    void setPaused(bool on);
+    bool paused() const { return m_paused; }
     // Testing: run the autopilot for a stretch of simulated time, a frame at a time.
     void autopilotSteps(int frames, double secondsPerFrame);
 
@@ -66,6 +69,11 @@ public:
     // the reference orbit computed once for its deepest frame.
     bool beginMovie(const core::View& deepest, int w, int h);
     void endMovie();
+    // One movie frame, taken from a keyframe computed once per halving of the view (much faster than computing
+    // every frame; the colors are still made per frame, so color cycling and the loop's color matching work).
+    QImage renderMovieFrame(const core::View& v, int w, int h, int samplesPerSide, double timeSeconds, QString* error,
+                            const std::function<bool(double)>& progress = {});
+    int movieKeyframes() const { return m_movieKeyframes; }
     // The escape times (mu, -1 inside) of a small render of a view, for matching a loop's colors.
     std::vector<float> probeEscapeTimes(const core::View& v, int w, int h);
     // The newest colors as a picture (for place thumbnails).
@@ -88,6 +96,7 @@ signals:
     void gpuUnavailable(const QString& reason);
     void zoomLimitReached(const QString& why);
     void autopilotChanged(bool on);
+    void pausedChanged(bool on);
 
 protected:
     void initializeGL() override;
@@ -118,6 +127,9 @@ private:
     bool m_ok = false, m_tried = false;
     bool m_exporting = false;
     bool m_inMovie = false;
+    render::RawFrame m_movieKey, m_movieFrame;
+    render::ColorTarget m_movieTarget;
+    int m_movieKeyframes = 0;
     QString m_error;
 
     core::View m_view;
@@ -145,6 +157,10 @@ private:
     qint64 m_fpsWindowStart = 0;
     bool m_busy = false;
     QTimer m_settle;
+
+    // Animation clock (color cycling): stands still while paused
+    bool m_paused = false;
+    double m_animTime = 0;
 
     // Autopilot
     bool m_autopilot = false;
