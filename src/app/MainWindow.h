@@ -71,6 +71,16 @@ public:
     bool recordZoomTo(const RecordSettings& s, const QString& path, QString* error,
                       const std::function<bool(int, int)>& progress = {});
     void setAutopilot(bool on);
+    void setAnimationPaused(bool on);
+    // Settings history (colors and formula): every change can be undone and redone.
+    void undo();
+    void redo();
+    int undoSteps() const { return int(m_undo.size()); }
+    int redoSteps() const { return int(m_redo.size()); }
+    void finishEdit();                 // ends the current run of slider moves now (tests)
+    void resetCard(const QString& title);
+    void randomizeEverything();
+    void randomizeColors();
     bool placeButtonsEnabled(bool* go, bool* rename, bool* remove) const;
 
 protected:
@@ -116,7 +126,14 @@ private:
     void back();
     void forward();
     void resetView();
-    void randomizeColors();
+    struct SettingsState {
+        core::FractalParams fractal;
+        core::ColorParams colors;
+    };
+    SettingsState currentSettings() const { return {m_fractal, m_colors}; }
+    void noteEdit();                   // a change is made: remember the state before it (once per run of moves)
+    void restoreSettings(const SettingsState& s);
+    void updateAnimationButtons();
     void showViewMenu(const QPoint& global, const QString& re, const QString& im);
     void switchToJulia(const QString& re, const QString& im);
     void switchToMandelbrot();
@@ -185,7 +202,17 @@ private:
     QPushButton* m_backBtn = nullptr;
     QPushButton* m_forwardBtn = nullptr;
     QPushButton* m_autoBtn = nullptr;
+    QPushButton* m_stopBtn = nullptr;
     QAction* m_autoAct = nullptr;
+    QAction* m_pauseAct = nullptr;
+    QAction* m_undoAct = nullptr;
+    QAction* m_redoAct = nullptr;
+
+    // Settings history
+    QList<SettingsState> m_undo, m_redo;
+    SettingsState m_lastState;          // the settings when the last run of changes ended
+    QTimer m_editBurst;                 // moves of one slider within a moment are one step
+    bool m_restoring = false;
 
     // Menus
     QMenu* m_viewMenu = nullptr;

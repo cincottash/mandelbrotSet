@@ -8,6 +8,7 @@
 
 #include "core/Minibrot.h"
 #include "core/Palette.h"
+#include "core/RandomScene.h"
 
 #include <QPainter>
 #include <QSignalBlocker>
@@ -106,6 +107,9 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
     m_saveTimer.setSingleShot(true);
     m_saveTimer.setInterval(800);
     connect(&m_saveTimer, &QTimer::timeout, this, [this] { saveSettingsNow(); });
+    m_editBurst.setSingleShot(true);
+    m_editBurst.setInterval(700);
+    connect(&m_editBurst, &QTimer::timeout, this, [this] { m_lastState = currentSettings(); });
 
     // The last session comes back as it was left.
     core::View startView = core::View::home(false);
@@ -128,6 +132,12 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
     m_view->setZoomStep(std::pow(1.5, m_s.zoomSpeedPct / 100.0));
     m_view->setJuliaPreview(m_s.juliaPreview);
     syncControls();
+    m_lastState = currentSettings();
+    connect(m_view, &FractalView::pausedChanged, this, [this](bool on) {
+        updateAnimationButtons();
+        if (m_view->autopilot() || m_colors.cycleSpeed != 0.0)
+            log(on ? QStringLiteral("Paused. Resume (or Space on the picture) goes on from here.") : QStringLiteral("Resumed."));
+    });
 
     connect(m_view, &FractalView::viewSettled, this, [this] { rememberView(); saveSettingsSoon(); });
     connect(m_view, &FractalView::contextMenuRequested, this, &MainWindow::showViewMenu);
@@ -138,7 +148,7 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
         updateStatus();
     });
     connect(m_view, &FractalView::autopilotChanged, this, [this](bool on) {
-        m_autoBtn->setText(on ? QStringLiteral("■ Stop Autopilot") : QStringLiteral("Autopilot ▶"));
+        updateAnimationButtons();
         {
             QSignalBlocker block(m_autoAct);
             m_autoAct->setChecked(on);
@@ -252,13 +262,18 @@ void MainWindow::buildMenus()
     });
     explore->addSeparator();
     explore->addAction(QStringLiteral("Add to Places…"), QKeySequence(QStringLiteral("Ctrl+D")), this, &MainWindow::addPlace);
-    explore->addAction(QStringLiteral("Randomize Colors"), QKeySequence(QStringLiteral("Ctrl+R")), this, &MainWindow::randomizeColors);
+    explore->addAction(QStringLiteral("Randomize Everything"), QKeySequence(QStringLiteral("Ctrl+R")), this, &MainWindow::randomizeEverything);
+    explore->addAction(QStringLiteral("Randomize Colors"), QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, &MainWindow::randomizeColors);
     explore->addSeparator();
     m_autoAct = explore->addAction(QStringLiteral("Autopilot"));
     m_autoAct->setShortcut(QKeySequence(Qt::Key_P));
     m_autoAct->setCheckable(true);
     m_autoAct->setToolTip(QStringLiteral("Zooms in on its own, forever, steering toward the richest detail."));
     connect(m_autoAct, &QAction::triggered, this, [this](bool on) { setAutopilot(on); });
+    m_pauseAct = explore->addAction(QStringLiteral("Pause Animation"));
+    m_pauseAct->setCheckable(true);
+    m_pauseAct->setToolTip(QStringLiteral("Stops the autopilot and color cycling where they are (Space on the picture)."));
+    connect(m_pauseAct, &QAction::triggered, this, [this](bool on) { setAnimationPaused(on); });
     QMenu* apSpeed = explore->addMenu(QStringLiteral("Autopilot Speed"));
     auto* apGroup = new QActionGroup(this);
     const QList<QPair<QString, double>> apSpeeds = {{QStringLiteral("Slow"), 1.25}, {QStringLiteral("Normal"), 2.0},
@@ -275,6 +290,38 @@ void MainWindow::buildMenus()
     connect(explore, &QMenu::aboutToShow, this, [this] {
         m_backAct->setEnabled(m_historyPos > 0);
         m_forwardAct->setEnabled(m_historyPos >= 0 && m_historyPos < int(m_history.size()) - 1);
+    });
+
+    QMenu* edit = bar->addMenu(QStringLiteral("&Edit"));
+    m_undoAct = edit->addAction(QStringLiteral("Undo"), QKeySequence::Undo, this, &MainWindow::undo);
+    m_redoAct = edit->addAction(QStringLiteral("Redo"), QKeySequence(QStringLiteral("Ctrl+Y")), this, &MainWindow::redo);
+    m_undoAct->setToolTip(QStringLiteral("Puts back the colors and formula as they were before the last change."));
+    edit->addSeparator();
+    edit->addAction(QStringLiteral("Reset Colors to Defaults"), this, [this] {
+        finishEdit();
+        setColors(core::ColorParams());
+        finishEdit();
+        log(QStringLiteral("Colors are back to their defaults (the Seahorse Classic look). Undo brings yours back."));
+    });
+    edit->addAction(QStringLiteral("Reset Everything to Defaults"), this, [this] {
+        finishEdit();
+        noteEdit();
+        m_restoring = true;
+        m_fractal = core::FractalParams();
+        m_colors = core::ColorParams();
+        syncControls();
+        m_view->setFractal(m_fractal);
+        m_view->setColors(m_colors);
+        m_restoring = false;
+        m_view->setView(core::View::home(false));
+        rememberView();
+        m_lastState = currentSettings();
+        log(QStringLiteral("Formula, colors and view are back to their defaults. Undo and Back bring yours back."));
+        saveSettingsSoon();
+    });
+    connect(edit, &QMenu::aboutToShow, this, [this] {
+        m_undoAct->setEnabled(!m_undo.isEmpty());
+        m_redoAct->setEnabled(!m_redo.isEmpty());
     });
 
     m_viewMenu = bar->addMenu(QStringLiteral("&View"));
@@ -401,7 +448,10 @@ void MainWindow::buildMenus()
             QStringLiteral("Scroll: zoom in or out at the pointer\nDrag: move\nRight-drag: turn\nDouble-click: zoom in 4×\n"
                            "Right-click: zoom here, center here, the Julia set here, copy the point\n\n"
                            "Arrow keys: move\n+ and -: zoom\nPage Up and Page Down: turn\nHome: reset the view\n"
-                           "Alt+Left and Alt+Right: back and forward\nJ: Julia preview\nF11: full screen"));
+                           "Alt+Left and Alt+Right: back and forward\nJ: Julia preview\nP: autopilot\n"
+                           "Space: pause or resume the autopilot and color cycling\nEscape: stop the autopilot\n"
+                           "Ctrl+Z and Ctrl+Y: undo and redo a change of colors or formula\n"
+                           "Ctrl+R: randomize everything\nF11: full screen"));
     });
     help->addAction(QStringLiteral("Project Website"), this, [] { QDesktopServices::openUrl(QUrl(kWebsite)); });
     help->addAction(QStringLiteral("Open App Data Folder"), this, [] {
@@ -515,6 +565,17 @@ QFrame* MainWindow::makeCard(const QString& title, QVBoxLayout** body)
     t->setObjectName(QStringLiteral("cardTitle"));
     head->addWidget(t);
     head->addStretch();
+    static const QStringList resettable = {QStringLiteral("FRACTAL"), QStringLiteral("COLOR"), QStringLiteral("SINE WAVES"),
+                                           QStringLiteral("LIGHTING"), QStringLiteral("EDGES"), QStringLiteral("INTERIOR"),
+                                           QStringLiteral("EFFECTS")};
+    if (resettable.contains(title)) {
+        auto* reset = linkButton(QStringLiteral("Reset"));
+        reset->setProperty("testId", QStringLiteral("reset ") + title);
+        reset->setToolTip(QStringLiteral("Puts this card's settings back to their defaults. Undo (Ctrl+Z) brings yours back."));
+        connect(reset, &QToolButton::clicked, this, [this, title] { resetCard(title); });
+        head->addWidget(reset);
+        head->addSpacing(10);
+    }
     auto* toggle = linkButton(QStringLiteral("Hide ▾"));
     toggle->setProperty("testId", QStringLiteral("fold ") + title);
     head->addWidget(toggle);
@@ -927,9 +988,11 @@ void MainWindow::buildUi()
     auto* save = new QPushButton(QStringLiteral("Save Picture…"));
     save->setProperty("testId", QStringLiteral("savePicture"));
     connect(save, &QPushButton::clicked, this, &MainWindow::savePicture);
-    auto* random = new QPushButton(QStringLiteral("Randomize Colors"));
+    auto* random = new QPushButton(QStringLiteral("Randomize"));
     random->setProperty("testId", QStringLiteral("randomize"));
-    connect(random, &QPushButton::clicked, this, &MainWindow::randomizeColors);
+    random->setToolTip(QStringLiteral("A random fractal, spot, zoom and colors, every time (Ctrl+R). Undo and Back "
+                                      "return to the ones before."));
+    connect(random, &QPushButton::clicked, this, &MainWindow::randomizeEverything);
     bb->addWidget(save);
     bb->addWidget(random);
     bb->addStretch();
@@ -954,12 +1017,22 @@ void MainWindow::buildUi()
     connect(m_forwardBtn, &QPushButton::clicked, this, &MainWindow::forward);
     connect(reset, &QPushButton::clicked, this, &MainWindow::resetView);
     connect(record, &QPushButton::clicked, this, &MainWindow::recordZoom);
-    connect(m_autoBtn, &QPushButton::clicked, this, [this] { setAutopilot(!m_view->autopilot()); });
+    // One button starts the autopilot, then pauses and resumes it; Stop ends it.
+    connect(m_autoBtn, &QPushButton::clicked, this, [this] {
+        if (!m_view->autopilot()) setAutopilot(true);
+        else setAnimationPaused(!m_view->paused());
+    });
+    m_stopBtn = new QPushButton(QStringLiteral("■ Stop"));
+    m_stopBtn->setProperty("testId", QStringLiteral("stop"));
+    m_stopBtn->setToolTip(QStringLiteral("Ends the autopilot here (Escape)."));
+    m_stopBtn->hide();
+    connect(m_stopBtn, &QPushButton::clicked, this, [this] { setAutopilot(false); });
     bb->addWidget(m_backBtn);
     bb->addWidget(m_forwardBtn);
     bb->addWidget(reset);
     bb->addSpacing(12);
     bb->addWidget(record);
+    bb->addWidget(m_stopBtn);
     bb->addWidget(m_autoBtn);
     outer->addWidget(bottom);
     setCentralWidget(root);
@@ -1076,9 +1149,115 @@ void MainWindow::updateStyleVisibility()
     m_juliaHint->setVisible(!m_fractal.julia());
 }
 
+void MainWindow::noteEdit()
+{
+    if (m_restoring) return;
+    // The first change of a run (moves of a slider within a moment of each other) remembers the state before it.
+    if (!m_editBurst.isActive()) {
+        m_undo.append(m_lastState);
+        if (m_undo.size() > 300) m_undo.removeFirst();
+        m_redo.clear();
+    }
+    m_editBurst.start();
+}
+
+void MainWindow::finishEdit()
+{
+    m_editBurst.stop();
+    m_lastState = currentSettings();
+}
+
+void MainWindow::restoreSettings(const SettingsState& s)
+{
+    m_restoring = true;
+    m_fractal = s.fractal;
+    m_colors = s.colors;
+    syncControls();
+    m_view->setFractal(m_fractal);
+    m_view->setColors(m_colors);
+    m_restoring = false;
+    m_lastState = s;
+    saveSettingsSoon();
+}
+
+void MainWindow::undo()
+{
+    if (m_undo.isEmpty()) return;
+    m_editBurst.stop();
+    m_redo.append(currentSettings());
+    restoreSettings(m_undo.takeLast());
+    log(QStringLiteral("Undone."));
+}
+
+void MainWindow::redo()
+{
+    if (m_redo.isEmpty()) return;
+    m_editBurst.stop();
+    m_undo.append(currentSettings());
+    restoreSettings(m_redo.takeLast());
+    log(QStringLiteral("Redone."));
+}
+
+void MainWindow::resetCard(const QString& title)
+{
+    finishEdit();   // a run of slider moves before this stays its own Undo step
+    const core::ColorParams dc;
+    if (title == QLatin1String("FRACTAL")) {
+        // The formula's numbers; the type (Mandelbrot or Julia) stays, so the view still fits.
+        core::FractalParams d;
+        d.type = m_fractal.type;
+        m_fractal = d;
+        syncControls();
+        fractalEdited();
+    } else {
+        for (const core::SliderSpec& sp : core::sliderSpecs())
+            if (QLatin1String(sp.card) == title) m_colors.*(sp.member) = dc.*(sp.member);
+        if (title == QLatin1String("COLOR")) {
+            m_colors.style = dc.style;
+            m_colors.palette = dc.palette;
+            m_colors.colorScale = dc.colorScale;
+            m_colors.moireTint = dc.moireTint;
+            updateStyleVisibility();
+        } else if (title == QLatin1String("EDGES")) {
+            m_colors.edgeColor = dc.edgeColor;
+        } else if (title == QLatin1String("INTERIOR")) {
+            m_colors.interiorStyle = dc.interiorStyle;
+            m_colors.interiorColor = dc.interiorColor;
+            m_colors.interiorColor2 = dc.interiorColor2;
+        }
+        syncControls();
+        colorsEdited();
+    }
+    finishEdit();
+    QString name = title.toLower();
+    name[0] = name[0].toUpper();
+    log(QStringLiteral("%1 settings are back to their defaults. Undo (Ctrl+Z) brings yours back.").arg(name));
+}
+
+void MainWindow::setAnimationPaused(bool on)
+{
+    m_view->setPaused(on);
+    updateAnimationButtons();
+}
+
+void MainWindow::updateAnimationButtons()
+{
+    const bool running = m_view->autopilot();
+    const bool paused = m_view->paused();
+    m_autoBtn->setText(!running ? QStringLiteral("Autopilot ▶") : paused ? QStringLiteral("▶ Resume") : QStringLiteral("❚❚ Pause"));
+    m_autoBtn->setToolTip(!running ? QStringLiteral("Zooms in on its own, forever, steering toward the richest detail (P). "
+                                                    "Drag to steer it; Escape stops it.")
+                          : paused ? QStringLiteral("Goes on from here (Space on the picture).")
+                                   : QStringLiteral("Stops the zoom where it is, without ending the autopilot (Space on the picture)."));
+    m_stopBtn->setVisible(running);
+    QSignalBlocker block(m_pauseAct);
+    m_pauseAct->setChecked(paused);
+}
+
 void MainWindow::fractalEdited()
 {
     if (m_syncing) return;
+    noteEdit();
     m_view->setFractal(m_fractal);
     updateStyleVisibility();
     saveSettingsSoon();
@@ -1087,6 +1266,7 @@ void MainWindow::fractalEdited()
 void MainWindow::colorsEdited()
 {
     if (m_syncing) return;
+    noteEdit();
     m_view->setColors(m_colors);
     // Name the look again (or "Custom") without touching the other controls.
     int match = -1;
@@ -1212,12 +1392,20 @@ core::Location MainWindow::currentLocation() const
 
 void MainWindow::applyLocation(const core::Location& l, bool remember)
 {
+    // A change of formula or colors this way is one step of Undo too.
+    const bool changes = !l.fractal.sameFormula(m_fractal) || l.fractal.toJson() != m_fractal.toJson()
+                         || (l.hasColors && !(l.colors == m_colors));
+    if (changes) {
+        finishEdit();   // a run of slider moves before this stays its own Undo step
+        noteEdit();
+    }
     m_fractal = l.fractal;
     if (l.hasColors) m_colors = l.colors;
     syncControls();
     m_view->setFractal(m_fractal);
     m_view->setColors(m_colors);
     m_view->setView(l.view);
+    if (changes) finishEdit();
     if (remember) rememberView();
     saveSettingsSoon();
 }
@@ -1325,11 +1513,14 @@ void MainWindow::resetView()
 void MainWindow::switchToJulia(const QString& re, const QString& im)
 {
     if (!m_fractal.julia()) m_lastMandelbrotView = m_view->view();
+    finishEdit();
+    noteEdit();
     m_fractal.type = core::FractalType::Julia;
     m_fractal.juliaRe = re;
     m_fractal.juliaIm = im;
     syncControls();
     m_view->setFractal(m_fractal);
+    finishEdit();
     m_view->setView(core::View::home(true));
     rememberView();
     log(QStringLiteral("Julia set for c = %1 %2 %3i.").arg(re, im.startsWith(QLatin1Char('-')) ? QStringLiteral("−") : QStringLiteral("+"),
@@ -1339,9 +1530,12 @@ void MainWindow::switchToJulia(const QString& re, const QString& im)
 
 void MainWindow::switchToMandelbrot()
 {
+    finishEdit();
+    noteEdit();
     m_fractal.type = core::FractalType::Mandelbrot;
     syncControls();
     m_view->setFractal(m_fractal);
+    finishEdit();
     m_view->setView(m_lastMandelbrotView);
     rememberView();
     saveSettingsSoon();
@@ -1667,29 +1861,31 @@ bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QStr
 
 void MainWindow::randomizeColors()
 {
-    QRandomGenerator* r = QRandomGenerator::global();
-    core::ColorParams c = m_colors;
-    const QList<int> styles = {int(core::ColorStyle::Gradient), int(core::ColorStyle::Gradient), int(core::ColorStyle::SineWaves),
-                               int(core::ColorStyle::Stripes), int(core::ColorStyle::Distance), int(core::ColorStyle::Angle)};
-    c.style = styles[r->bounded(int(styles.size()))];
-    c.palette = core::palettes()[r->bounded(int(core::palettes().size()))].name;
-    c.density = std::exp(std::log(0.3) + r->generateDouble() * (std::log(3.0) - std::log(0.3)));
-    c.offset = r->generateDouble();
-    c.sineFreqR = 0.3 + r->generateDouble() * 2.0;
-    c.sineFreqG = 0.3 + r->generateDouble() * 2.0;
-    c.sineFreqB = 0.3 + r->generateDouble() * 2.0;
-    c.sinePhaseR = r->generateDouble();
-    c.sinePhaseG = r->generateDouble();
-    c.sinePhaseB = r->generateDouble();
-    c.lightStrength = r->generateDouble() * 0.9;
-    c.lightAngle = r->bounded(360);
-    c.lightHeight = 20 + r->bounded(50);
-    c.specular = r->generateDouble() * 0.6;
-    c.edgeGlow = r->bounded(3) == 0 ? r->generateDouble() * 0.8 : 0.0;
-    c.edgeColor = QColor::fromHsv(r->bounded(360), r->bounded(120), 230 + r->bounded(25));
-    c.hue = 0;
+    finishEdit();   // a run of slider moves before this stays its own Undo step
+    const core::ColorParams c = core::randomColorsFor(*QRandomGenerator::global(), m_colors, m_fractal, m_view->view());
     setColors(c);
+    finishEdit();
     log(QStringLiteral("New random colors: %1, %2 palette.").arg(core::styleNames().value(c.style), c.palette));
+}
+
+void MainWindow::randomizeEverything()
+{
+    setAutopilot(false);
+    const core::Scene s = core::randomScene(*QRandomGenerator::global());
+    core::Location l;
+    l.fractal = s.fractal;
+    l.view = s.view;
+    l.colors = s.colors;
+    l.hasColors = true;
+    if (s.fractal.julia() && !m_fractal.julia()) m_lastMandelbrotView = m_view->view();
+    applyLocation(l);
+    const QString what = s.fractal.julia()
+        ? QStringLiteral("the Julia set of %1 %2 %3i").arg(s.fractal.juliaRe.left(10),
+                                                          s.fractal.juliaIm.startsWith(QLatin1Char('-')) ? QStringLiteral("−") : QStringLiteral("+"),
+                                                          s.fractal.juliaIm.startsWith(QLatin1Char('-')) ? s.fractal.juliaIm.mid(1, 9) : s.fractal.juliaIm.left(9))
+        : s.fractal.power == 2 ? QStringLiteral("the Mandelbrot set") : QStringLiteral("the power %1 Mandelbrot set").arg(s.fractal.power);
+    log(QStringLiteral("Random: %1 at zoom %2×, %3 with the %4 palette. Undo and Back return to the ones before.")
+            .arg(what, s.view.magnificationText(), core::styleNames().value(s.colors.style), s.colors.palette));
 }
 
 // ------------------------------------------------------------------------------------------------ places

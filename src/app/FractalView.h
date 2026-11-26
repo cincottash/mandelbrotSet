@@ -50,6 +50,9 @@ public:
     bool autopilot() const { return m_autopilot; }
     void setAutopilotSpeed(double factorPerSecond) { m_autoRate = std::log(std::clamp(factorPerSecond, 1.01, 16.0)); }
     double autopilotSpeed() const { return std::exp(m_autoRate); }
+    // Pause: the autopilot and color cycling stop where they are and go on from there on Resume.
+    void setPaused(bool on);
+    bool paused() const { return m_paused; }
     // Testing: run the autopilot for a stretch of simulated time, a frame at a time.
     void autopilotSteps(int frames, double secondsPerFrame);
 
@@ -88,6 +91,7 @@ signals:
     void gpuUnavailable(const QString& reason);
     void zoomLimitReached(const QString& why);
     void autopilotChanged(bool on);
+    void pausedChanged(bool on);
 
 protected:
     void initializeGL() override;
@@ -145,6 +149,10 @@ private:
     qint64 m_fpsWindowStart = 0;
     bool m_busy = false;
     QTimer m_settle;
+
+    // Animation clock (color cycling): stands still while paused
+    bool m_paused = false;
+    double m_animTime = 0;
 
     // Autopilot
     bool m_autopilot = false;

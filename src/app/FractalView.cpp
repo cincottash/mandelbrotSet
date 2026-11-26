@@ -265,12 +265,13 @@ void FractalView::paintGL()
     autopilotAdvance(dt, now);
     const qreal dpr = devicePixelRatioF();
     const int W = std::max(1, int(std::lround(width() * dpr))), H = std::max(1, int(std::lround(height() * dpr)));
-    const bool animating = m_autopilot || std::fabs(m_zoomPending) > 1e-4 || m_panPending != QPointF()
+    const bool animating = (m_autopilot && !m_paused) || std::fabs(m_zoomPending) > 1e-4 || m_panPending != QPointF()
         || std::fabs(m_rotatePending) > 1e-5;
     const bool moving = m_dragging || m_rotating || animating || (now - m_lastChangeNs) < 150'000'000;
+    if (!m_paused) m_animTime += dt;
     m_core->setView(m_view);
     m_core->setOutputSize(W, H);
-    m_core->setTime(double(now) / 1e9);
+    m_core->setTime(m_animTime);
     const bool more = m_core->step(moving ? 8.0 : 22.0, moving);
     f->glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
     m_gpu.display(m_core->picture(), m_view, W, H, kBackground);
@@ -340,7 +341,7 @@ void FractalView::endMovie()
 {
     m_inMovie = false;
     m_exporting = false;
-    if (m_core) m_core->setTime(m_clock.nsecsElapsed() / 1e9);
+    if (m_core) m_core->setTime(m_animTime);
     update();
 }
 
@@ -508,6 +509,7 @@ void FractalView::keyPressEvent(QKeyEvent* e)
         if (m_autopilot) setAutopilot(false);
         stopMotion();
         break;
+    case Qt::Key_Space: setPaused(!m_paused); break;
     default: QOpenGLWidget::keyPressEvent(e); return;
     }
     e->accept();
@@ -522,9 +524,18 @@ void FractalView::leaveEvent(QEvent* e)
 
 // ---------------------------------------------------------------- autopilot
 
+void FractalView::setPaused(bool on)
+{
+    if (on == m_paused) return;
+    m_paused = on;
+    emit pausedChanged(on);
+    update();
+}
+
 void FractalView::setAutopilot(bool on)
 {
     if (on == m_autopilot || (on && !m_ok)) return;
+    if (!on) setPaused(false);
     m_autopilot = on;
     m_autoHasTarget = false;
     m_autoNextLookNs = 0;
@@ -589,7 +600,7 @@ bool FractalView::pickAutopilotTarget(QPointF* target)
 
 void FractalView::autopilotAdvance(double dt, qint64 now)
 {
-    if (!m_autopilot || !m_core) return;
+    if (!m_autopilot || !m_core || m_paused) return;
     if (now >= m_autoNextLookNs) {
         m_autoNextLookNs = now + 250'000'000;
         QPointF t;
