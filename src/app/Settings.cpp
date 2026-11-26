@@ -16,6 +16,7 @@ void fields(Settings& s, F&& f)
 {
     f("theme", s.theme);
     f("folded_cards", s.foldedCards);
+    f("cards_both_sides", s.cardsBothSides);
     f("always_on_top", s.alwaysOnTop);
     f("window_opacity", s.windowOpacity);
     f("julia_preview", s.juliaPreview);
@@ -82,6 +83,7 @@ void Settings::resetView()
     const Settings d;
     theme = d.theme;
     foldedCards = d.foldedCards;
+    cardsBothSides = d.cardsBothSides;
     alwaysOnTop = d.alwaysOnTop;
     windowOpacity = d.windowOpacity;
     juliaPreview = d.juliaPreview;

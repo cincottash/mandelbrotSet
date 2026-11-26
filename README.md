@@ -31,11 +31,14 @@ fine. Then scroll to zoom.
 | **P** | autopilot |
 | **Space** | pause or resume the autopilot and color cycling |
 | **Ctrl+R** | Randomize: a random fractal, spot and colors |
+| **Ctrl+Shift+R** | Randomize Colors: new colors and effects for the same spot |
+| **Ctrl+G** | Save to Gallery |
 | **Ctrl+Z, Ctrl+Y** | undo and redo changes to the colors and the formula |
 
 **Randomize** (bottom left) picks a random fractal (Mandelbrot, Julia, a higher power, the Burning Ship or the
-Tricorn), dives to a random spot with visible detail and colors it at random. Keep pressing it for new ones; Undo
-and Back return to earlier ones.
+Tricorn), dives to a random spot with visible detail and colors it at random. **Randomize Colors** keeps the spot
+and changes only the colors and effects: the style, palette, lighting, edges and inside, and sometimes bloom, a
+vignette, film grain or a sphere. Keep pressing either for new ones; Undo and Back return to earlier ones.
 
 ![Twenty-four presses of Randomize](docs/random.png)
 
@@ -50,10 +53,16 @@ the others go to about 10⁻²⁴.
 ![The Burning Ship, the Tricorn, Julia sets and the Nebulabrot](docs/fractals.png)
 
 The status line shows the center, the zoom, the iteration limit and how long the picture took. Back and Forward
-step through the views you visited. The **Gallery** (also Explore > Gallery) shows 18 famous fractals, each in its
-own colors: the Nebulabrot and the Buddhabrot, Seahorse and Elephant Valley, the Burning Ship, the Tricorn, the
-Douady Rabbit and other Julia sets, Pickover stalks, a Julia sphere and more. **Places** holds famous spots to
-start from (in the colors in use) and the ones you save.
+step through the views you visited.
+
+## Gallery and Places
+
+The **Gallery** (also Explore > Gallery) holds whole pictures: a spot together with its own colors and effects.
+It comes with 18 famous fractals: the Nebulabrot and the Buddhabrot, Seahorse and Elephant Valley, the Burning
+Ship, the Tricorn, the Douady Rabbit and other Julia sets, Pickover stalks, a Julia sphere and more. **Save to
+Gallery…** (Ctrl+G) keeps the picture on screen there, first in the list; right-click it to rename or remove it.
+
+**Places** holds just spots to explore: opening one keeps the colors you're using. Add… saves the spot on screen.
 
 ## Colors
 
@@ -77,6 +86,7 @@ with your settings, and a saved location carries its palette along.
 
 **Autopilot ▶** zooms in on its own, forever, steering toward the richest detail near the middle and backing out
 of empty views. Drag to steer it. **❚❚ Pause** (or Space) holds it where it is; **■ Stop** or Escape ends it.
+In the Buddhabrot, which takes seconds per picture, it flies through the Mandelbrot set from the same spot.
 
 ![Twelve moments of one autopilot flight](docs/autopilot.png)
 
@@ -84,8 +94,15 @@ of empty views. Drag to steer it. **❚❚ Pause** (or Space) holds it where it 
 
 <img align="right" width="380" src="docs/record.png">
 
-**Record Zoom…** renders a dive from the whole set into the current view as an MP4 video, an animated WebP, an
-animated GIF or PNG frames, at any size up to 4K (8K and more as frames). **Seamless Loop** finds a mini Mandelbrot inside the
+**Record Zoom…** renders a dive from the whole set into the current view:
+
+1. Zoom to where the movie should end.
+2. Click **Record Zoom…**, choose a **Format** (MP4 plays everywhere; GIF and WebP loop by themselves in chats and
+   browsers) and a **Size**, and a **Length**.
+3. Click **Record…** and choose where to save it. A progress bar shows the time left.
+
+Frame rate, anti-aliasing and Full Quality wait under **More Options**, ready as they are. Sizes go up to 4K (8K
+and more as PNG frames). **Seamless Loop** finds a mini Mandelbrot inside the
 view and zooms along the exact path into it. The mini copy looks like the whole set, the colors are matched at
 both ends and the wrap is blended, so the movie repeats forever. Movies are made from keyframes (two per halving
 of the view, each a little larger and finer than a frame), so they render several times faster than frame by frame.
@@ -103,13 +120,13 @@ drawn in pieces, so memory is never the limit.
 <details>
 <summary><b>Menus</b></summary>
 
-- **File:** Open Location…, Save Location…, Save Picture…, Copy Location, Paste Location, Settings (Change App
-  Data Folder…, Reset Settings to Defaults…), Quit
+- **File:** Open Location…, Save Location…, Save Picture…, Save to Gallery…, Copy Location, Paste Location, Settings
+  (Change App Data Folder…, Reset Settings to Defaults…), Quit
 - **Explore:** Back, Forward, Reset View, Zoom In, Zoom Out, Turn Left, Turn Right, Straighten, Add to Places…,
   Randomize Everything, Randomize Colors, Autopilot, Pause Animation, Autopilot Speed, Record Zoom…
 - **Edit:** Undo, Redo, Reset Colors to Defaults, Reset Everything to Defaults, Edit Palette…, Delete This Palette
-- **View:** Theme, Window Opacity, Julia Preview, Anti-Aliasing, Zoom Speed, Always on Top, Full Screen, Reset View
-  Options
+- **View:** Theme, Window Opacity, Julia Preview, Anti-Aliasing, Zoom Speed, Cards on Both Sides, Always on Top,
+  Full Screen, Reset View Options
 - **Help:** Mouse and Keys, Project Website, Open App Data Folder, Report a Problem, About
 
 </details>

@@ -11,7 +11,8 @@ struct Settings {
     // View options (View > Reset View Options)
     QString theme = QStringLiteral("dark");
     QStringList foldedCards = {QStringLiteral("EDGES"), QStringLiteral("INTERIOR"), QStringLiteral("EFFECTS"),
-                               QStringLiteral("SPHERE"), QStringLiteral("ACTIVITY")};
+                               QStringLiteral("SPHERE")};
+    bool cardsBothSides = true;       // the cards in two columns, one each side of the picture
     bool alwaysOnTop = false;
     int windowOpacity = 100;          // 30..100 %
     bool juliaPreview = false;        // the Julia set of the point under the pointer, in a corner

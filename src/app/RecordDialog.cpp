@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSpinBox>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -23,7 +24,15 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
 {
     setWindowTitle(QStringLiteral("Record Zoom"));
     auto* lay = new QVBoxLayout(this);
-    auto* pathTitle = new QLabel(QStringLiteral("PATH"));
+    auto* intro = new QLabel(QStringLiteral("The movie zooms from the whole set into the picture on screen, so zoom to "
+                                            "where it should end before opening this. Choose a format and a size, press "
+                                            "Record… and pick where to save it; a progress bar shows the time left. "
+                                            "Every other setting is ready as it is."));
+    intro->setWordWrap(true);
+    intro->setObjectName(QStringLiteral("muted"));
+    lay->addWidget(intro);
+    lay->addSpacing(4);
+    auto* pathTitle = new QLabel(QStringLiteral("WHAT TO RECORD"));
     pathTitle->setObjectName(QStringLiteral("cardTitle"));
     lay->addWidget(pathTitle);
     m_zoomIn = new QRadioButton(QStringLiteral("Zoom In From the Whole Set to This View"));
@@ -52,25 +61,22 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     formTitle->setObjectName(QStringLiteral("cardTitle"));
     lay->addSpacing(6);
     lay->addWidget(formTitle);
+    // The main choices: format, size and length. The rest waits under More Options, ready as it is.
     auto* form = new QFormLayout;
-    auto* secRow = new QHBoxLayout;
-    m_seconds = new QDoubleSpinBox;
-    m_seconds->setRange(1, 600);
-    m_seconds->setDecimals(1);
-    m_seconds->setSuffix(QStringLiteral(" s"));
-    const double doublings = std::max(1.0, m_current.log10Magnification() * 3.3219);
-    m_seconds->setValue(std::clamp(std::round(doublings), 5.0, 120.0));   // about one doubling per second
-    secRow->addWidget(m_seconds);
-    secRow->addStretch();
-    form->addRow(QStringLiteral("Length"), secRow);
-    m_fps = new QComboBox;
-    m_fps->addItems({QStringLiteral("24"), QStringLiteral("30"), QStringLiteral("60")});
-    m_fps->setCurrentIndex(1);
-    auto* fpsRow = new QHBoxLayout;
-    fpsRow->addWidget(m_fps);
-    fpsRow->addWidget(new QLabel(QStringLiteral("Frames per Second")));
-    fpsRow->addStretch();
-    form->addRow(QStringLiteral("Frame Rate"), fpsRow);
+    m_format = new QComboBox;
+    m_format->setProperty("testId", QStringLiteral("format"));
+    for (int i = 0; i < MovieWriter::formatNames().size(); ++i) {
+        m_format->addItem(MovieWriter::formatNames()[i]);
+        QString why;
+        if (!MovieWriter::available(MovieWriter::Format(i), &why)) {
+            m_format->setItemData(i, why, Qt::ToolTipRole);
+            m_format->setItemData(i, 0, Qt::UserRole - 1);   // disabled entry
+        }
+    }
+    m_format->setToolTip(QStringLiteral("MP4 plays everywhere; animated WebP loops by itself in browsers and chats; "
+                                        "animated GIF loops anywhere, with 256 colors a frame; "
+                                        "PNG Frames saves every frame as a picture in a folder."));
+    form->addRow(QStringLiteral("Format"), m_format);
     m_size = new QComboBox;
     const QSize win(windowSize.width() & ~1, windowSize.height() & ~1);
     m_size->addItem(QStringLiteral("Window Size (%1 × %2)").arg(win.width()).arg(win.height()), win);
@@ -96,34 +102,58 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     wh->addWidget(new QLabel(QStringLiteral("×")));
     wh->addWidget(m_h);
     wh->addStretch();
-    form->addRow(QStringLiteral("Width and Height"), wh);
+    form->addRow(QStringLiteral("Width and Height"), wh);   // shown for a Custom size only
+    auto* secRow = new QHBoxLayout;
+    m_seconds = new QDoubleSpinBox;
+    m_seconds->setRange(1, 600);
+    m_seconds->setDecimals(1);
+    m_seconds->setSuffix(QStringLiteral(" s"));
+    m_seconds->setToolTip(QStringLiteral("How long the movie plays. Longer zooms more slowly."));
+    const double doublings = std::max(1.0, m_current.log10Magnification() * 3.3219);
+    m_seconds->setValue(std::clamp(std::round(doublings), 5.0, 120.0));   // about one doubling per second
+    secRow->addWidget(m_seconds);
+    secRow->addStretch();
+    form->addRow(QStringLiteral("Length"), secRow);
+    lay->addLayout(form);
+
+    auto* more = new QToolButton;
+    more->setObjectName(QStringLiteral("link"));
+    more->setCursor(Qt::PointingHandCursor);
+    more->setProperty("testId", QStringLiteral("moreOptions"));
+    lay->addWidget(more, 0, Qt::AlignLeft);
+    auto* moreBox = new QWidget;
+    auto* moreForm = new QFormLayout(moreBox);
+    moreForm->setContentsMargins(0, 0, 0, 0);
+    m_fps = new QComboBox;
+    m_fps->addItems({QStringLiteral("24"), QStringLiteral("30"), QStringLiteral("60")});
+    m_fps->setCurrentIndex(1);
+    m_fps->setToolTip(QStringLiteral("30 is smooth; 60 is smoother still and takes twice as long to render."));
+    auto* fpsRow = new QHBoxLayout;
+    fpsRow->addWidget(m_fps);
+    fpsRow->addWidget(new QLabel(QStringLiteral("Frames per Second")));
+    fpsRow->addStretch();
+    moreForm->addRow(QStringLiteral("Frame Rate"), fpsRow);
     m_aa = new QComboBox;
     m_aa->addItems({QStringLiteral("Off"), QStringLiteral("2 × 2"), QStringLiteral("3 × 3"), QStringLiteral("4 × 4")});
     m_aa->setCurrentIndex(1);
     m_aa->setToolTip(QStringLiteral("Samples per pixel: smoother edges and less shimmer between frames, for 4, 9 or 16 "
                                     "times the work."));
-    form->addRow(QStringLiteral("Anti-Aliasing"), m_aa);
+    moreForm->addRow(QStringLiteral("Anti-Aliasing"), m_aa);
     m_fullQuality = new QCheckBox(QStringLiteral("Full Quality"));
     m_fullQuality->setProperty("testId", QStringLiteral("fullQuality"));
     m_fullQuality->setToolTip(QStringLiteral("Computes every frame on its own. Off, frames are taken from a sharper picture "
                                              "made twice per halving of the view: several times faster, and only a little "
                                              "softer in the finest detail."));
-    form->addRow(QString(), m_fullQuality);
-    m_format = new QComboBox;
-    m_format->setProperty("testId", QStringLiteral("format"));
-    for (int i = 0; i < MovieWriter::formatNames().size(); ++i) {
-        m_format->addItem(MovieWriter::formatNames()[i]);
-        QString why;
-        if (!MovieWriter::available(MovieWriter::Format(i), &why)) {
-            m_format->setItemData(i, why, Qt::ToolTipRole);
-            m_format->setItemData(i, 0, Qt::UserRole - 1);   // disabled entry
-        }
-    }
-    m_format->setToolTip(QStringLiteral("MP4 plays everywhere; animated WebP loops by itself in browsers and chats; "
-                                        "animated GIF loops anywhere, with 256 colors a frame; "
-                                        "PNG Frames saves every frame as a picture in a folder."));
-    form->addRow(QStringLiteral("Format"), m_format);
-    lay->addLayout(form);
+    moreForm->addRow(QString(), m_fullQuality);
+    lay->addWidget(moreBox);
+    auto showMore = [this, more, moreBox](bool on) {
+        moreBox->setVisible(on);
+        more->setText(on ? QStringLiteral("Fewer Options ▾") : QStringLiteral("More Options ▴"));
+        more->setToolTip(on ? QString() : QStringLiteral("Frame rate, anti-aliasing and Full Quality."));
+        adjustSize();
+    };
+    showMore(false);
+    connect(more, &QToolButton::clicked, this, [moreBox, showMore] { showMore(moreBox->isHidden()); });
     m_info = new QLabel;
     m_info->setWordWrap(true);
     m_info->setObjectName(QStringLiteral("muted"));
@@ -135,11 +165,12 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
-    auto applySize = [this] {
+    auto applySize = [this, form, wh] {
         const QSize s = m_size->currentData().toSize();
         const bool custom = !s.isValid();
         m_w->setEnabled(custom);
         m_h->setEnabled(custom);
+        form->setRowVisible(wh, custom);
         if (!custom) {
             m_w->setValue(s.width());
             m_h->setValue(s.height());

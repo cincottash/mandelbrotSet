@@ -177,16 +177,17 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
         last = why;
     });
 
-    loadPlaces();
+    loadGallery();
+    loadPlaces();   // after the Gallery: saved places that carry colors move there
+    refreshGallery();
     refreshPlaces();
     for (const QString& c : m_cards.keys()) setCardOpen(c, !m_s.foldedCards.contains(c), false);
     updateStyleVisibility();
 
-    setMinimumSize(1000, 640);   // every button and the cards' columns fit from here up
     if (!m_s.geometry.isEmpty()) restoreGeometry(m_s.geometry);
     else if (QScreen* sc = QGuiApplication::primaryScreen()) {
         const QRect a = sc->availableGeometry();
-        resize(std::min(int(a.width() * 0.88), 1720), std::min(int(a.height() * 0.88), 1060));
+        resize(std::min(int(a.width() * 0.9), m_s.cardsBothSides ? 2040 : 1720), std::min(int(a.height() * 0.88), 1060));
         move(a.center() - rect().center());
     }
     if (m_s.alwaysOnTop) setWindowFlag(Qt::WindowStaysOnTopHint, true);
@@ -221,6 +222,7 @@ void MainWindow::buildMenus()
     file->addAction(QStringLiteral("Open Location…"), QKeySequence::Open, this, &MainWindow::openLocation);
     file->addAction(QStringLiteral("Save Location…"), QKeySequence::Save, this, &MainWindow::saveLocation);
     file->addAction(QStringLiteral("Save Picture…"), QKeySequence(QStringLiteral("Ctrl+Shift+S")), this, &MainWindow::savePicture);
+    file->addAction(QStringLiteral("Save to Gallery…"), QKeySequence(QStringLiteral("Ctrl+G")), this, &MainWindow::saveToGallery);
     file->addSeparator();
     file->addAction(QStringLiteral("Copy Location"), QKeySequence(QStringLiteral("Ctrl+Shift+C")), this, &MainWindow::copyLocation);
     file->addAction(QStringLiteral("Paste Location"), QKeySequence(QStringLiteral("Ctrl+Shift+V")), this, &MainWindow::pasteLocation);
@@ -233,6 +235,7 @@ void MainWindow::buildMenus()
             m_notKept->setVisible(appdata::isTemporary());
             saveSettingsNow();
             savePlaces();
+            saveGallery();
         } else if (!msg.isEmpty()) {
             log(msg);
         }
@@ -252,6 +255,7 @@ void MainWindow::buildMenus()
         m_view->setZoomStep(1.5);
         m_view->setView(core::View::home(false));
         for (const QString& c : m_cards.keys()) setCardOpen(c, !m_s.foldedCards.contains(c), false);
+        arrangeCards();
         applyTheme();
         applyOpacity();
         log(QStringLiteral("Settings are back to their defaults."));
@@ -274,12 +278,7 @@ void MainWindow::buildMenus()
         m_view->rotateBy(-v.angle * 180.0 / M_PI);
     });
     explore->addSeparator();
-    QMenu* gallery = explore->addMenu(QStringLiteral("Gallery"));
-    {
-        const QList<core::Location> items = core::galleryPlaces();
-        for (int i = 0; i < items.size(); ++i)
-            gallery->addAction(items[i].name, this, [this, i] { showGalleryItem(i); });
-    }
+    m_galleryMenu = explore->addMenu(QStringLiteral("Gallery"));   // filled by rebuildGalleryMenu()
     explore->addAction(QStringLiteral("Add to Places…"), QKeySequence(QStringLiteral("Ctrl+D")), this, &MainWindow::addPlace);
     explore->addAction(QStringLiteral("Randomize Everything"), QKeySequence(QStringLiteral("Ctrl+R")), this, &MainWindow::randomizeEverything);
     explore->addAction(QStringLiteral("Randomize Colors"), QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, &MainWindow::randomizeColors);
@@ -446,6 +445,12 @@ void MainWindow::buildMenus()
         });
     }
     m_viewMenu->addSeparator();
+    m_bothSidesAct = m_viewMenu->addAction(QStringLiteral("Cards on Both Sides"));
+    m_bothSidesAct->setCheckable(true);
+    m_bothSidesAct->setChecked(m_s.cardsBothSides);
+    m_bothSidesAct->setToolTip(QStringLiteral("Puts the Gallery, Places, Effects, Sphere and Activity cards right of the "
+                                              "picture, so less scrolling is needed. Off, every card is on the left."));
+    connect(m_bothSidesAct, &QAction::toggled, this, [this](bool on) { setCardsBothSides(on); });
     m_onTopAct = m_viewMenu->addAction(QStringLiteral("Always on Top"));
     m_onTopAct->setCheckable(true);
     m_onTopAct->setChecked(m_s.alwaysOnTop);
@@ -471,6 +476,7 @@ void MainWindow::buildMenus()
         m_view->setAntiAliasing(m_s.antiAliasing);
         m_view->setZoomStep(1.5);
         for (const QString& c : m_cards.keys()) setCardOpen(c, !m_s.foldedCards.contains(c), false);
+        arrangeCards();
         applyOpacity();
         saveSettingsSoon();
     });
@@ -484,7 +490,8 @@ void MainWindow::buildMenus()
                            "Alt+Left and Alt+Right: back and forward\nJ: Julia preview\nP: autopilot\n"
                            "Space: pause or resume the autopilot and color cycling\nEscape: stop the autopilot\n"
                            "Ctrl+Z and Ctrl+Y: undo and redo a change of colors or formula\n"
-                           "Ctrl+R: randomize everything\nF11: full screen"));
+                           "Ctrl+R: randomize everything\nCtrl+Shift+R: randomize the colors and effects here\n"
+                           "Ctrl+G: save the picture to the Gallery\nF11: full screen"));
     });
     help->addAction(QStringLiteral("Project Website"), this, [] { QDesktopServices::openUrl(QUrl(kWebsite)); });
     help->addAction(QStringLiteral("Open App Data Folder"), this, [] {
@@ -620,6 +627,7 @@ QFrame* MainWindow::makeCard(const QString& title, QVBoxLayout** body)
     lay->addWidget(b, 1);
     *body = bl;
     m_cards.insert(title, {frame, b, toggle});
+    m_cardOrder << title;
     connect(toggle, &QToolButton::clicked, this, [this, title] {
         const Card& c = m_cards[title];
         setCardOpen(title, !c.body->isVisibleTo(c.frame));
@@ -650,7 +658,59 @@ bool MainWindow::cardOpen(const QString& name) const
 void MainWindow::updateStretch()
 {
     // Folded cards stack at the top; the spare height goes below the last card.
-    if (m_leftCol) m_leftCol->setStretch(m_leftCol->count() - 1, 1);
+    for (QVBoxLayout* col : {m_leftCol, m_rightCol})
+        if (col && col->count() > 0) col->setStretch(col->count() - 1, 1);
+}
+
+namespace {
+// The cards that go right of the picture when the cards use both sides, in their order there.
+const QStringList& rightCards()
+{
+    static const QStringList r = {QStringLiteral("GALLERY"), QStringLiteral("PLACES"), QStringLiteral("EFFECTS"),
+                                  QStringLiteral("SPHERE"), QStringLiteral("ACTIVITY")};
+    return r;
+}
+}  // namespace
+
+void MainWindow::arrangeCards()
+{
+    if (!m_leftCol || !m_rightCol) return;
+    const bool both = m_s.cardsBothSides;
+    // Each card keeps its own shown or hidden state (Sine Waves and Buddhabrot show only for their style and type).
+    QHash<QString, bool> shown;
+    for (const QString& name : m_cardOrder) shown.insert(name, !m_cards[name].frame->isHidden());
+    for (QVBoxLayout* col : {m_leftCol, m_rightCol})
+        while (QLayoutItem* it = col->takeAt(0)) delete it;   // the layout items only: the cards stay
+    for (const QString& name : m_cardOrder)
+        if (!both || !rightCards().contains(name)) m_leftCol->addWidget(m_cards[name].frame);
+    if (both)
+        for (const QString& name : rightCards())
+            if (m_cards.contains(name)) m_rightCol->addWidget(m_cards[name].frame);
+    m_leftCol->addStretch(1);
+    m_rightCol->addStretch(1);
+    for (const QString& name : m_cardOrder) m_cards[name].frame->setVisible(shown.value(name));
+    m_rightScroll->setVisible(both);
+    // Every button and the cards' columns fit from here up (never wider than the screen).
+    int minW = both ? 1300 : 1000;
+    if (QScreen* sc = screen()) minW = std::min(minW, sc->availableGeometry().width());
+    setMinimumSize(minW, 640);
+    updateStretch();
+    if (m_bothSidesAct) {
+        QSignalBlocker block(m_bothSidesAct);
+        m_bothSidesAct->setChecked(both);
+    }
+}
+
+void MainWindow::setCardsBothSides(bool on)
+{
+    m_s.cardsBothSides = on;
+    arrangeCards();
+    saveSettingsSoon();
+}
+
+bool MainWindow::cardOnRight(const QString& name) const
+{
+    return m_cards.contains(name) && m_rightCol && m_rightCol->indexOf(m_cards[name].frame) >= 0;
 }
 
 QGridLayout* MainWindow::sliderGrid(const char* card, QVBoxLayout* into)
@@ -936,19 +996,29 @@ void MainWindow::buildUi()
     hl->addWidget(m_pill);
     outer->addWidget(header);
 
-    // Body: cards on the left, the picture on the right
+    // Body: cards on the left, the picture, and more cards on the right (View > Cards on Both Sides)
     auto* bodyW = new QWidget;
     auto* bl = new QHBoxLayout(bodyW);
     bl->setContentsMargins(12, 12, 12, 12);
     bl->setSpacing(12);
-    auto* scroll = new QScrollArea;
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    auto* leftW = new QWidget;
-    m_leftCol = new QVBoxLayout(leftW);
-    m_leftCol->setContentsMargins(0, 0, 4, 0);
-    m_leftCol->setSpacing(10);
+    // A column of cards that scrolls when the cards are taller than the window. It is as wide as its widest card,
+    // and never squeezes a slider.
+    auto makeColumn = [](QVBoxLayout** col) {
+        auto* scroll = new QScrollArea;
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        scroll->setFixedWidth(400);
+        auto* inner = new QWidget;
+        *col = new QVBoxLayout(inner);
+        (*col)->setContentsMargins(0, 0, 4, 0);
+        (*col)->setSpacing(10);
+        scroll->setWidget(inner);
+        return scroll;
+    };
+    QScrollArea* scroll = makeColumn(&m_leftCol);
+    QScrollArea* rightScroll = makeColumn(&m_rightCol);
+    m_rightScroll = rightScroll;
     m_leftCol->addWidget(buildFractalCard());
     {
         // Buddhabrot: shown only for that type.
@@ -1079,9 +1149,14 @@ void MainWindow::buildUi()
         });
     }
     {
-        // GALLERY: famous fractals, each in its own look, one click away.
+        // GALLERY: whole pictures, each in its own look, one click away: the user's own, then famous fractals.
         QVBoxLayout* b = nullptr;
         m_leftCol->addWidget(makeCard(QStringLiteral("GALLERY"), &b));
+        auto* hint = new QLabel(QStringLiteral("Whole pictures: each brings its own colors and effects. Save yours here "
+                                               "with Save to Gallery."));
+        hint->setObjectName(QStringLiteral("muted"));
+        hint->setWordWrap(true);
+        b->addWidget(hint);
         m_gallery = core::galleryPlaces();
         m_galleryList = new QListWidget;
         m_galleryList->setProperty("testId", QStringLiteral("gallery"));
@@ -1094,23 +1169,53 @@ void MainWindow::buildUi()
         m_galleryList->setUniformItemSizes(true);
         m_galleryList->setWordWrap(true);
         m_galleryList->setMinimumHeight(260);
-        m_galleryList->setToolTip(QStringLiteral("Famous fractals, each in its own colors. Click one to see it; "
-                                                 "Undo brings your colors back."));
-        for (const core::Location& l : m_gallery) {
-            auto* it = new QListWidgetItem(l.name);
-            QPixmap blank(144, 90);
-            blank.fill(QColor(0x20, 0x22, 0x28));
-            it->setIcon(QIcon(blank));
-            it->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
-            m_galleryList->addItem(it);
-        }
+        m_galleryList->setContextMenuPolicy(Qt::CustomContextMenu);
         b->addWidget(m_galleryList);
+        auto* row = new QHBoxLayout;
+        auto* saveBtn = new QPushButton(QStringLiteral("Save to Gallery…"));
+        saveBtn->setProperty("testId", QStringLiteral("saveToGallery"));
+        saveBtn->setToolTip(QStringLiteral("Keeps the picture on screen in the Gallery: the spot, the fractal, the colors "
+                                           "and the effects (Ctrl+G)."));
+        connect(saveBtn, &QPushButton::clicked, this, &MainWindow::saveToGallery);
+        row->addWidget(saveBtn);
+        row->addStretch();
+        b->addLayout(row);
         connect(m_galleryList, &QListWidget::itemClicked, this,
                 [this](QListWidgetItem* it) { showGalleryItem(m_galleryList->row(it)); });
+        connect(m_galleryList, &QListWidget::customContextMenuRequested, this, [this](const QPoint& p) {
+            QListWidgetItem* it = m_galleryList->itemAt(p);
+            QMenu menu;
+            if (it) {
+                const int i = m_galleryList->row(it);
+                m_galleryList->setCurrentItem(it);
+                menu.addAction(QStringLiteral("Show"), this, [this, i] { showGalleryItem(i); });
+                if (galleryItemIsMine(i)) {
+                    menu.addAction(QStringLiteral("Rename…"), this, [this, i] {
+                        bool ok = false;
+                        const QString name = QInputDialog::getText(this, QStringLiteral("Rename Picture"), QStringLiteral("Name"),
+                                                                   QLineEdit::Normal, m_gallery[i].name, &ok).trimmed();
+                        if (ok) renameGalleryItem(i, name);
+                    });
+                    menu.addAction(QStringLiteral("Remove…"), this, [this, i] {
+                        if (QMessageBox::question(this, QStringLiteral("Remove Picture"),
+                                                  QStringLiteral("Remove \"%1\" from the Gallery?").arg(m_gallery[i].name))
+                            == QMessageBox::Yes)
+                            removeGalleryItem(i);
+                    });
+                }
+                menu.addSeparator();
+            }
+            menu.addAction(QStringLiteral("Save to Gallery…"), this, &MainWindow::saveToGallery);
+            menu.exec(m_galleryList->viewport()->mapToGlobal(p));
+        });
     }
     {
         QVBoxLayout* b = nullptr;
         m_leftCol->addWidget(makeCard(QStringLiteral("PLACES"), &b));
+        auto* hint = new QLabel(QStringLiteral("Spots to explore: each opens in the colors in use now."));
+        hint->setObjectName(QStringLiteral("muted"));
+        hint->setWordWrap(true);
+        b->addWidget(hint);
         buildPlaces(b);
     }
     {
@@ -1119,15 +1224,10 @@ void MainWindow::buildUi()
         m_log = new QPlainTextEdit;
         m_log->setReadOnly(true);
         m_log->setMaximumBlockCount(2000);
-        m_log->setMinimumHeight(140);
+        m_log->setMinimumHeight(110);
         m_log->setProperty("testId", QStringLiteral("log"));
         b->addWidget(m_log);
     }
-    m_leftCol->addStretch(1);
-    scroll->setWidget(leftW);
-    // The column is as wide as its widest card, and never squeezes a slider.
-    leftW->adjustSize();
-    scroll->setFixedWidth(400);
     bl->addWidget(scroll);
 
     auto* right = new QVBoxLayout;
@@ -1151,6 +1251,8 @@ void MainWindow::buildUi()
     m_status->setProperty("testId", QStringLiteral("status"));
     right->addWidget(m_status);
     bl->addLayout(right, 1);
+    bl->addWidget(rightScroll);
+    arrangeCards();
     outer->addWidget(bodyW, 1);
 
     // Bottom bar
@@ -1161,13 +1263,27 @@ void MainWindow::buildUi()
     auto* save = new QPushButton(QStringLiteral("Save Picture…"));
     save->setProperty("testId", QStringLiteral("savePicture"));
     connect(save, &QPushButton::clicked, this, &MainWindow::savePicture);
+    auto* toGallery = new QPushButton(QStringLiteral("Save to Gallery…"));
+    toGallery->setProperty("testId", QStringLiteral("saveToGalleryBar"));
+    toGallery->setToolTip(QStringLiteral("Keeps this picture in the Gallery, colors and effects included, to come back to "
+                                         "with one click (Ctrl+G)."));
+    connect(toGallery, &QPushButton::clicked, this, &MainWindow::saveToGallery);
     auto* random = new QPushButton(QStringLiteral("Randomize"));
     random->setProperty("testId", QStringLiteral("randomize"));
     random->setToolTip(QStringLiteral("A random fractal, spot, zoom and colors, every time (Ctrl+R). Undo and Back "
                                       "return to the ones before."));
     connect(random, &QPushButton::clicked, this, &MainWindow::randomizeEverything);
+    auto* randomColors = new QPushButton(QStringLiteral("Randomize Colors"));
+    randomColors->setProperty("testId", QStringLiteral("randomizeColors"));
+    randomColors->setToolTip(QStringLiteral("New random colors and effects for this same spot (Ctrl+Shift+R): the style, "
+                                            "palette, lighting, edges and inside, and sometimes bloom, a vignette, film "
+                                            "grain or a sphere. Undo brings the ones before back."));
+    connect(randomColors, &QPushButton::clicked, this, &MainWindow::randomizeColors);
     bb->addWidget(save);
+    bb->addWidget(toGallery);
+    bb->addSpacing(12);
     bb->addWidget(random);
+    bb->addWidget(randomColors);
     bb->addStretch();
     m_backBtn = new QPushButton(QStringLiteral("◀ Back"));
     m_backBtn->setProperty("testId", QStringLiteral("back"));
@@ -1216,7 +1332,7 @@ void MainWindow::buildPlaces(QVBoxLayout* body)
     auto* row = new QHBoxLayout;
     m_places = new QListWidget;
     m_places->setIconSize(QSize(80, 50));
-    m_places->setMinimumHeight(240);
+    m_places->setMinimumHeight(190);
     m_places->setProperty("testId", QStringLiteral("places"));
     m_places->setContextMenuPolicy(Qt::CustomContextMenu);
     row->addWidget(m_places, 1);
@@ -1229,7 +1345,8 @@ void MainWindow::buildPlaces(QVBoxLayout* body)
     add->setProperty("testId", QStringLiteral("addPlace"));
     m_renamePlace->setProperty("testId", QStringLiteral("renamePlace"));
     m_removePlace->setProperty("testId", QStringLiteral("removePlace"));
-    add->setToolTip(QStringLiteral("Saves the current view, formula and colors as a place (Ctrl+D)."));
+    add->setToolTip(QStringLiteral("Saves this spot (the view and the fractal) as a place, to open later in whatever "
+                                   "colors are in use (Ctrl+D). Save to Gallery keeps the colors too."));
     for (QPushButton* b : {m_goPlace, add, m_renamePlace, m_removePlace}) buttons->addWidget(b);
     buttons->addStretch();
     row->addLayout(buttons);
@@ -1585,6 +1702,7 @@ void MainWindow::closeEvent(QCloseEvent* e)
 {
     saveSettingsNow();
     if (m_interactive) savePlaces();
+    if (m_interactive) saveGallery();
     QMainWindow::closeEvent(e);
 }
 
@@ -1807,6 +1925,7 @@ void MainWindow::showViewMenu(const QPoint& global, const QString& re, const QSt
         QApplication::clipboard()->setText(re + QStringLiteral(" ") + im);
         log(QStringLiteral("Copied the point %1, %2.").arg(re.left(40), im.left(40)));
     });
+    menu.addAction(QStringLiteral("Save to Gallery…"), this, &MainWindow::saveToGallery);
     menu.addAction(QStringLiteral("Add to Places…"), this, &MainWindow::addPlace);
     menu.exec(global);
 }
@@ -1919,10 +2038,21 @@ bool MainWindow::savePictureTo(const QString& f, int w, int h, int ss, QString* 
 
 void MainWindow::setAutopilot(bool on)
 {
-    if (on && m_fractal.buddhabrot()) {
-        log(QStringLiteral("The autopilot flies through the Mandelbrot and Julia sets; the Buddhabrot stays shallow."));
-        updateAnimationButtons();
-        return;
+    if (on && m_fractal.buddhabrot() && m_view->gpuReady()) {
+        // The Buddhabrot takes seconds to count each picture, too slow to fly through: the autopilot flies through
+        // the Mandelbrot set from this same spot instead (Undo brings the Buddhabrot back).
+        const core::View here = m_view->view();
+        finishEdit();
+        noteEdit();
+        m_fractal.type = core::FractalType::Mandelbrot;
+        syncControls();
+        m_view->setFractal(m_fractal);
+        finishEdit();
+        m_view->setView(here);
+        rememberView();
+        saveSettingsSoon();
+        log(QStringLiteral("The autopilot flies through the Mandelbrot set, so the picture switched from the Buddhabrot to "
+                           "the Mandelbrot set at this spot. Undo (Ctrl+Z) brings the Buddhabrot back."));
     }
     m_view->setAutopilot(on);
     if (on && !m_view->autopilot() && !m_view->gpuReady()) log(QStringLiteral("The autopilot needs the graphics card renderer."));
@@ -2246,15 +2376,28 @@ void MainWindow::loadPlaces()
     if (!f.open(QIODevice::ReadOnly)) return;
     const QJsonArray a = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("places")).toArray();
     int bad = 0;
+    QList<core::Location> withColors;
     for (const QJsonValue& v : a) {
         core::Location l;
         QString err;
-        if (l.fromJson(v.toObject(), &err)) m_placeList << l;
-        else ++bad;
+        if (!l.fromJson(v.toObject(), &err)) ++bad;
+        else if (l.hasColors) withColors << l;   // saved by an older version, colors and all: a whole picture
+        else m_placeList << l;
     }
     if (bad) log(QStringLiteral("%1 saved %2 couldn't be read and %3 skipped.").arg(bad)
                      .arg(bad == 1 ? QStringLiteral("place") : QStringLiteral("places"))
                      .arg(bad == 1 ? QStringLiteral("was") : QStringLiteral("were")));
+    if (!withColors.isEmpty()) {
+        // Places are spots only now; the ones saved with their colors become the user's Gallery pictures.
+        const int mine = myGalleryCount();
+        for (int i = 0; i < withColors.size(); ++i) m_gallery.insert(mine + i, withColors[i]);
+        saveGallery();
+        savePlaces();
+        log(QStringLiteral("%1 saved %2 with %3 own colors moved to the Gallery, where pictures keep their colors.")
+                .arg(withColors.size())
+                .arg(withColors.size() == 1 ? QStringLiteral("place") : QStringLiteral("places"))
+                .arg(withColors.size() == 1 ? QStringLiteral("its") : QStringLiteral("their")));
+    }
 }
 
 void MainWindow::savePlaces()
@@ -2319,6 +2462,7 @@ void MainWindow::addPlaceNamed(const QString& name)
     if (name.trimmed().isEmpty()) return;
     core::Location l = currentLocation();
     l.name = name.trimmed().left(200);
+    l.hasColors = false;   // a spot: it opens in the colors in use (the Gallery keeps colors)
     const QImage pic = m_view->currentPicture();
     if (!pic.isNull()) {
         // A thumbnail cut to the list's shape from the middle of the picture.
@@ -2380,7 +2524,8 @@ void MainWindow::removePlace()
 void MainWindow::goToPlace(int row)
 {
     if (row < 0 || row >= m_placeList.size()) return;
-    const core::Location& l = m_placeList[row];
+    core::Location l = m_placeList[row];
+    l.hasColors = false;   // places are spots: the colors in use stay
     if (l.fractal.julia() && !m_fractal.julia()) m_lastMandelbrotView = m_view->view();
     applyLocation(l);
     log(QStringLiteral("Went to \"%1\" (zoom %2×).").arg(l.name, l.view.magnificationText()));
@@ -2397,6 +2542,146 @@ void MainWindow::showGalleryItem(int i)
     log(QStringLiteral("Gallery: %1. Undo (Ctrl+Z) brings your colors back.").arg(l.name));
 }
 
+namespace {
+QString galleryFile() { return QDir(appdata::folder()).filePath(QStringLiteral("gallery.json")); }
+}  // namespace
+
+int MainWindow::myGalleryCount() const
+{
+    int n = 0;
+    for (const core::Location& l : m_gallery) n += l.builtIn ? 0 : 1;
+    return n;
+}
+
+void MainWindow::loadGallery()
+{
+    QList<core::Location> mine;
+    QFile f(galleryFile());
+    if (f.open(QIODevice::ReadOnly)) {
+        const QJsonArray a = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("pictures")).toArray();
+        int bad = 0;
+        for (const QJsonValue& v : a) {
+            core::Location l;
+            QString err;
+            if (l.fromJson(v.toObject(), &err)) {
+                l.builtIn = false;
+                mine << l;
+            } else {
+                ++bad;
+            }
+        }
+        if (bad) log(QStringLiteral("%1 Gallery %2 couldn't be read and %3 skipped.").arg(bad)
+                         .arg(bad == 1 ? QStringLiteral("picture") : QStringLiteral("pictures"))
+                         .arg(bad == 1 ? QStringLiteral("was") : QStringLiteral("were")));
+    }
+    m_gallery = mine + core::galleryPlaces();
+}
+
+void MainWindow::saveGallery()
+{
+    if (!m_interactive) return;
+    QJsonArray a;
+    for (const core::Location& l : m_gallery)
+        if (!l.builtIn) a.append(l.toJson(true));
+    QSaveFile f(galleryFile());   // never a half-written file
+    if (f.open(QIODevice::WriteOnly)) {
+        f.write(QJsonDocument(QJsonObject{{QStringLiteral("pictures"), a}}).toJson(QJsonDocument::Indented));
+        if (!f.commit()) log(QStringLiteral("Couldn't save the Gallery to %1.").arg(QDir::toNativeSeparators(galleryFile())));
+    }
+}
+
+void MainWindow::refreshGallery()
+{
+    const int keep = m_galleryList->currentRow();
+    m_galleryList->clear();
+    for (const core::Location& l : m_gallery) {
+        auto* it = new QListWidgetItem(l.name);
+        QPixmap pm;
+        if (!l.thumbnail.isNull()) {
+            pm = QPixmap::fromImage(l.thumbnail);
+        } else {
+            pm = QPixmap(144, 90);
+            pm.fill(QColor(0x20, 0x22, 0x28));
+        }
+        it->setIcon(QIcon(pm));
+        it->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
+        it->setToolTip(l.builtIn ? QStringLiteral("%1\nA famous fractal in its own colors. Click to see it.").arg(l.name)
+                                 : QStringLiteral("%1\nSaved by you. Click to see it; right-click to rename or remove it.")
+                                       .arg(l.name));
+        m_galleryList->addItem(it);
+    }
+    if (keep >= 0 && keep < m_galleryList->count()) m_galleryList->setCurrentRow(keep);
+    rebuildGalleryMenu();
+}
+
+void MainWindow::rebuildGalleryMenu()
+{
+    if (!m_galleryMenu) return;
+    m_galleryMenu->clear();
+    const int mine = myGalleryCount();
+    for (int i = 0; i < m_gallery.size(); ++i) {
+        if (i == mine && mine > 0) m_galleryMenu->addSeparator();   // the user's pictures, then the famous ones
+        m_galleryMenu->addAction(m_gallery[i].name, this, [this, i] { showGalleryItem(i); });
+    }
+}
+
+void MainWindow::saveToGallery()
+{
+    QString name = QStringLiteral("Picture %1").arg(myGalleryCount() + 1);
+    bool ok = false;
+    name = QInputDialog::getText(this, QStringLiteral("Save to Gallery"), QStringLiteral("Name"), QLineEdit::Normal, name, &ok)
+               .trimmed();
+    if (ok && !name.isEmpty()) saveToGalleryNamed(name);
+}
+
+void MainWindow::saveToGalleryNamed(const QString& name)
+{
+    if (name.trimmed().isEmpty()) return;
+    core::Location l = currentLocation();
+    l.name = name.trimmed().left(200);
+    l.hasColors = true;
+    l.builtIn = false;
+    // The thumbnail at the Gallery's shape, in the picture's own colors and effects; the screen's picture if the
+    // graphics card can't make one.
+    l.thumbnail = m_view->renderThumbnail(l.fractal, l.colors, l.view, 288, 180);
+    if (l.thumbnail.isNull()) {
+        const QImage pic = m_view->currentPicture();
+        if (!pic.isNull()) {
+            const double want = 288.0 / 180.0;
+            QRect r = pic.rect();
+            if (double(r.width()) / r.height() > want) r.setWidth(int(r.height() * want));
+            else r.setHeight(int(r.width() / want));
+            r.moveCenter(pic.rect().center());
+            l.thumbnail = pic.copy(r).scaled(288, 180, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        }
+    }
+    m_gallery.prepend(l);   // newest first
+    refreshGallery();
+    m_galleryList->setCurrentRow(0);
+    m_galleryList->scrollToTop();
+    setCardOpen(QStringLiteral("GALLERY"), true);
+    saveGallery();
+    log(QStringLiteral("Saved \"%1\" to the Gallery. Click it there to come back to it, colors and all.").arg(l.name));
+}
+
+void MainWindow::renameGalleryItem(int i, const QString& name)
+{
+    if (!galleryItemIsMine(i) || name.trimmed().isEmpty()) return;
+    m_gallery[i].name = name.trimmed().left(200);
+    refreshGallery();
+    saveGallery();
+}
+
+void MainWindow::removeGalleryItem(int i)
+{
+    if (!galleryItemIsMine(i)) return;
+    const QString name = m_gallery[i].name;
+    m_gallery.removeAt(i);
+    refreshGallery();
+    saveGallery();
+    log(QStringLiteral("Removed \"%1\" from the Gallery.").arg(name));
+}
+
 void MainWindow::renderBuiltInThumbnails()
 {
     // One thumbnail per idle moment, so the window never waits for them. The Gallery's first, in their own colors.
@@ -2407,6 +2692,7 @@ void MainWindow::renderBuiltInThumbnails()
         const QImage img = m_view->renderThumbnail(l.fractal, l.colors, l.view, 288, 180);
         l.thumbnail = img.isNull() ? QImage(288, 180, QImage::Format_RGB32) : img;
         if (QListWidgetItem* it = m_galleryList->item(i)) it->setIcon(QIcon(QPixmap::fromImage(l.thumbnail)));
+        if (!l.builtIn && !img.isNull()) saveGallery();   // the user's pictures keep theirs
         QTimer::singleShot(60, this, [this] { renderBuiltInThumbnails(); });
         return;
     }
