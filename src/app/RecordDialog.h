@@ -30,6 +30,7 @@ struct RecordSettings {
     core::View from, to;            // the path's ends (the loop's "to" is the minibrot's copy of the start)
     core::Minibrot minibrot;
     double crossfadeSeconds = 0.75; // loops only
+    bool keyframes = true;          // frames from a keyframe per halving (fast); false: every frame computed in full
     int frames() const { return std::max(2, int(std::lround(seconds * fps))); }
 };
 

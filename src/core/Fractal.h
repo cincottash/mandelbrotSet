@@ -10,7 +10,8 @@
 
 namespace core {
 
-enum class FractalType { Mandelbrot = 0, Julia = 1 };
+// Buddhabrot: the Mandelbrot formula drawn by where its escaping orbits go (a separate, counting renderer).
+enum class FractalType { Mandelbrot = 0, Julia = 1, Buddhabrot = 2 };
 // The step from z to the next z:
 //   Classic       z^p + c
 //   Burning Ship  (|x| + i|y|)^2 + c, drawn with the ship upright: x' = x^2 - y^2 + cx, y' = 2|xy| - cy
@@ -28,11 +29,14 @@ struct FractalParams {
     bool autoIterations = true;
     int maxIterations = 1000;       // used when autoIterations is off; 16..kMaxIterations
     double escapeRadius = 256.0;    // 2..100000
+    // Buddhabrot: the iteration limits of the red, green and blue counts, and the fewest iterations counted.
+    int buddhaRed = 5000, buddhaGreen = 500, buddhaBlue = 50, buddhaMin = 0;
 
     static constexpr int kMinIterations = 16;
     static constexpr int kMaxIterations = 5'000'000;
 
     bool julia() const { return type == FractalType::Julia; }
+    bool buddhabrot() const { return type == FractalType::Buddhabrot; }
     bool classic() const { return formula == Formula::Classic; }
     // Deep zooms (past about 1e-24), the skip-ahead table and the inside-the-set shortcuts need the classic
     // formula at power 2: their math is written for it.
@@ -50,7 +54,9 @@ struct FractalParams {
     {
         return type == o.type && formula == o.formula && power == o.power && (type == FractalType::Mandelbrot
                                                       || (juliaRe == o.juliaRe && juliaIm == o.juliaIm))
-            && escapeRadius == o.escapeRadius;
+            && escapeRadius == o.escapeRadius
+            && (type != FractalType::Buddhabrot
+                || (buddhaRed == o.buddhaRed && buddhaGreen == o.buddhaGreen && buddhaBlue == o.buddhaBlue && buddhaMin == o.buddhaMin));
     }
 };
 

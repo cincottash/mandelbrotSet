@@ -66,6 +66,13 @@ public:
     // `progress` gets 0..1 and returns false to cancel. A null image on cancel or error.
     QImage renderImage(const core::View& v, int w, int h, int ss, QString* error,
                        const std::function<bool(double)>& progress = {});
+    // The same, keeping the raw numbers on the graphics card instead of coloring them (movie keyframes). The frame
+    // must fit one piece (w * h * ss^2 at most kMaxRawPixels). The caller frees `out` with GpuEngine::freeFrame().
+    bool renderRaw(const core::View& v, int w, int h, int ss, RawFrame* out, QString* error,
+                   const std::function<bool(double)>& progress = {});
+    static constexpr int kMaxRawPixels = 16 * 1024 * 1024;
+    const core::ColorParams& colors() const { return m_colors; }
+    double time() const { return m_time; }
 
     // Computes a reference orbit for the deepest view of a movie now, so every frame of a zoom toward it reuses it.
     bool prepareReference(const core::View& deepest, int w, int h);
@@ -114,6 +121,16 @@ private:
     void stopWorker();
     PassParams passParams(const core::View& v, int outW, int outH, int ss, int maxIt) const;
     void afterFullPass(const RawFrame& f);
+    QImage renderImpl(const core::View& v, int w, int h, int ss, QString* error,
+                      const std::function<bool(double)>& progress, RawFrame* keep);
+    // Buddhabrot: a counting renderer instead of the escape-time one.
+    BuddhaParams buddhaParams(const core::View& v, int w, int h) const;
+    static qint64 buddhaTarget(int w, int h) { return qint64(w) * h * 150; }
+    bool buddhaStep(double budgetMs);
+    QImage renderBuddha(const core::View& v, int w, int h, QString* error, const std::function<bool(double)>& progress);
+    BuddhaParams m_buddhaKey;
+    qint64 m_buddhaSamples = 0;
+    bool m_buddhaActive = false;
 
     GpuEngine& m_gpu;
     core::FractalParams m_fractal;

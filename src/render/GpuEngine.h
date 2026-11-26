@@ -57,6 +57,22 @@ struct RawFrame {
     int divisor = 1;              // 1 = full resolution, 4 = a quarter-size preview (set by the caller)
 };
 
+// Buddhabrot: what is counted, and where.
+struct BuddhaParams {
+    double cx = -0.5, cy = 0, scale = 1.25, angle = 0;   // the view (single precision is enough: shallow views)
+    int w = 0, h = 0;
+    int limits[3] = {5000, 500, 50};                     // red, green, blue
+    int minIter = 0;
+    int formula = 0, power = 2;
+    double boxX = -2.2, boxY = -1.6, boxW = 3.2, boxH = 3.2;   // where the random points c are drawn from
+    bool operator==(const BuddhaParams& o) const
+    {
+        return cx == o.cx && cy == o.cy && scale == o.scale && angle == o.angle && w == o.w && h == o.h
+            && limits[0] == o.limits[0] && limits[1] == o.limits[1] && limits[2] == o.limits[2] && minIter == o.minIter
+            && formula == o.formula && power == o.power && boxX == o.boxX && boxY == o.boxY && boxW == o.boxW && boxH == o.boxH;
+    }
+};
+
 // A picture of colors on the graphics card.
 struct ColorTarget {
     unsigned fbo = 0, tex = 0;
@@ -90,6 +106,17 @@ public:
     bool passPending() const { return !m_tiles.empty() || m_groupActive; }
     double passProgress() const;
 
+    // Buddhabrot: start counting afresh, count more random orbits for about budgetMs (returns how many were
+    // drawn), and color the counts into a picture.
+    void buddhaReset(int w, int h);
+    qint64 buddhaAccumulate(const BuddhaParams& p, double budgetMs);
+    void buddhaColorize(const BuddhaParams& p, const core::ColorParams& c, ColorTarget& target);
+
+    // Movie keyframes: a frame's raw numbers taken from a larger, finer keyframe instead of computed again.
+    // keyCovers(): the keyframe holds the whole frame view with at least minDensity keyframe pixels per frame pixel.
+    bool keyCovers(const RawFrame& key, const core::View& frameView, int outW, int outH, double minDensity) const;
+    bool resample(const RawFrame& key, const core::View& frameView, int outW, int outH, int ss, RawFrame& out);
+
     void setPalette(const QVector<quint32>& rgba);
     void ensureTarget(ColorTarget& t, int w, int h);
     void freeTarget(ColorTarget& t);
@@ -117,7 +144,10 @@ private:
     void bloom(ColorTarget& target, const core::ColorParams& c);   // the glow, on the finished colors
     void sphere(ColorTarget& target, const core::ColorParams& c);  // the picture wrapped onto a ball
 
-    unsigned m_progBloom = 0, m_progSphere = 0;
+    unsigned m_progBloom = 0, m_progSphere = 0, m_progResample = 0, m_progBuddha = 0, m_progBuddhaColor = 0;
+    unsigned m_buddhaHist = 0, m_buddhaMax = 0;
+    int m_buddhaW = 0, m_buddhaH = 0;
+    quint32 m_buddhaSeed = 1;
     ColorTarget m_scratch;
     unsigned m_bloomTex[2] = {0, 0}, m_bloomFbo[2] = {0, 0};
     int m_bloomW = 0, m_bloomH = 0;

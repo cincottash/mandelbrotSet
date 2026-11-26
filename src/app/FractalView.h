@@ -69,6 +69,11 @@ public:
     // the reference orbit computed once for its deepest frame.
     bool beginMovie(const core::View& deepest, int w, int h);
     void endMovie();
+    // One movie frame, taken from a keyframe computed once per halving of the view (much faster than computing
+    // every frame; the colors are still made per frame, so color cycling and the loop's color matching work).
+    QImage renderMovieFrame(const core::View& v, int w, int h, int samplesPerSide, double timeSeconds, QString* error,
+                            const std::function<bool(double)>& progress = {});
+    int movieKeyframes() const { return m_movieKeyframes; }
     // The escape times (mu, -1 inside) of a small render of a view, for matching a loop's colors.
     std::vector<float> probeEscapeTimes(const core::View& v, int w, int h);
     // The newest colors as a picture (for place thumbnails).
@@ -122,6 +127,9 @@ private:
     bool m_ok = false, m_tried = false;
     bool m_exporting = false;
     bool m_inMovie = false;
+    render::RawFrame m_movieKey, m_movieFrame;
+    render::ColorTarget m_movieTarget;
+    int m_movieKeyframes = 0;
     QString m_error;
 
     core::View m_view;

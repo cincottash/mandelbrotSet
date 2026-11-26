@@ -314,6 +314,7 @@ bool FractalView::beginMovie(const core::View& deepest, int w, int h)
     setAutopilot(false);
     m_inMovie = true;
     m_exporting = true;
+    m_movieKeyframes = 0;
     makeCurrent();
     const bool ok = m_core->prepareReference(deepest, w, h);
     doneCurrent();
@@ -339,8 +340,60 @@ std::vector<float> FractalView::probeEscapeTimes(const core::View& v, int w, int
     return mu;
 }
 
+QImage FractalView::renderMovieFrame(const core::View& v, int w, int h, int ss, double timeSeconds, QString* error,
+                                     const std::function<bool(double)>& progress)
+{
+    if (!m_tried) grabFramebuffer();
+    if (!m_ok) {
+        if (error) *error = m_error;
+        return {};
+    }
+    // A keyframe covers a little more than the frame (M) at D0 keyframe pixels per frame pixel; frames are taken from
+    // it until the zoom brings that down to D0 / sqrt(2) (two keyframes per halving of the view), or the view leaves it.
+    ss = std::clamp(ss, 1, 4);
+    if (m_fractal.buddhabrot()) return renderPicture(v, w, h, ss, error, progress, timeSeconds);   // counted per frame
+    const double D0 = std::max(2.0, double(ss)), M = 1.15;
+    const int kw = int(std::ceil(w * D0 * M)), kh = int(std::ceil(h * D0 * M));
+    if (qint64(kw) * kh > render::RenderCore::kMaxRawPixels || kw > 16384 || kh > 16384)
+        return renderPicture(v, w, h, ss, error, progress, timeSeconds);   // too large to keep: every frame in full
+    m_exporting = true;
+    makeCurrent();
+    m_core->setTime(timeSeconds);
+    if (!m_gpu.keyCovers(m_movieKey, v, w, h, D0 / std::sqrt(2.0))) {
+        core::View kv = v;
+        kv.scale = v.scale * core::FloatExp(M);
+        const bool ok = m_core->renderRaw(kv, kw, kh, 1, &m_movieKey, error, [&](double p) {
+            const bool goOn = !progress || progress(p);
+            makeCurrent();
+            return goOn;
+        });
+        if (!ok) {
+            doneCurrent();
+            return {};
+        }
+        ++m_movieKeyframes;
+    }
+    QImage img;
+    if (m_gpu.resample(m_movieKey, v, w, h, ss, m_movieFrame)) {
+        m_gpu.colorize(m_movieFrame, m_colors, timeSeconds, m_movieTarget);
+        img = m_gpu.readTarget(m_movieTarget);
+    } else if (error) {
+        *error = QStringLiteral("The frame couldn't be taken from its keyframe.");
+    }
+    doneCurrent();
+    return img;
+}
+
 void FractalView::endMovie()
 {
+    if (m_ok && (m_movieKey.tex0 || m_movieFrame.tex0 || m_movieTarget.fbo)) {
+        makeCurrent();
+        m_gpu.freeFrame(m_movieKey);
+        m_gpu.freeFrame(m_movieFrame);
+        m_gpu.freeTarget(m_movieTarget);
+        doneCurrent();
+    }
+    m_movieKey = render::RawFrame();
     m_inMovie = false;
     m_exporting = false;
     if (m_core) m_core->setTime(m_animTime);
@@ -536,7 +589,7 @@ void FractalView::setPaused(bool on)
 
 void FractalView::setAutopilot(bool on)
 {
-    if (on == m_autopilot || (on && !m_ok)) return;
+    if (on == m_autopilot || (on && (!m_ok || m_fractal.buddhabrot()))) return;
     if (!on) setPaused(false);
     m_autopilot = on;
     m_autoHasTarget = false;

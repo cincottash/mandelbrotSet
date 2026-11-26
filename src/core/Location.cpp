@@ -140,6 +140,15 @@ QList<Location> builtInPlaces()
         l.builtIn = true;
         out << l;
     }
+    {
+        Location l;
+        l.name = QStringLiteral("Buddhabrot");
+        l.fractal.type = FractalType::Buddhabrot;
+        l.view = l.fractal.home();
+        l.hasColors = false;
+        l.builtIn = true;
+        out << l;
+    }
     return out;
 }
 

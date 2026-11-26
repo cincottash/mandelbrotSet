@@ -52,6 +52,10 @@ struct ColorParams {
     double vignette = 0.0, grain = 0.0;
     double bloom = 0.0, bloomSize = 2.5, bloomThreshold = 0.6;   // bloomSize: % of the picture's height
 
+    // Buddhabrot coloring: the Nebulabrot (red, green, blue from the three iteration limits) or the palette.
+    int buddhaNebula = 1;
+    double buddhaExposure = 1.0, buddhaGamma = 0.5;
+
     // The picture wrapped onto a ball (core/Sphere.h); size 0 = flat.
     double sphereSize = 0.0, sphereShade = 0.6, sphereShine = 0.5;
     QColor sphereBackground{0x0B, 0x0D, 0x12};

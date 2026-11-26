@@ -676,7 +676,9 @@ QWidget* MainWindow::buildFractalCard()
     int r = 0;
     grid->addWidget(new QLabel(QStringLiteral("Type")), r, 0);
     m_type = new QComboBox;
-    m_type->addItems({QStringLiteral("Mandelbrot Set"), QStringLiteral("Julia Set")});
+    m_type->addItems({QStringLiteral("Mandelbrot Set"), QStringLiteral("Julia Set"), QStringLiteral("Buddhabrot")});
+    m_type->setItemData(2, QStringLiteral("The Mandelbrot set drawn by where its escaping orbits travel: a glowing, "
+                                          "ghostly figure (the Nebulabrot in three colors)."), Qt::ToolTipRole);
     m_type->setProperty("testId", QStringLiteral("type"));
     grid->addWidget(m_type, r++, 1, 1, 2);
     grid->addWidget(new QLabel(QStringLiteral("Formula")), r, 0);
@@ -747,6 +749,7 @@ QWidget* MainWindow::buildFractalCard()
     connect(m_type, &QComboBox::currentIndexChanged, this, [this](int i) {
         if (m_syncing) return;
         if (i == 1) switchToJulia(m_fractal.juliaRe, m_fractal.juliaIm);
+        else if (i == 2) switchToBuddhabrot();
         else switchToMandelbrot();
     });
     connect(m_formula, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -941,6 +944,60 @@ void MainWindow::buildUi()
     m_leftCol->setContentsMargins(0, 0, 4, 0);
     m_leftCol->setSpacing(10);
     m_leftCol->addWidget(buildFractalCard());
+    {
+        // Buddhabrot: shown only for that type.
+        QVBoxLayout* b = nullptr;
+        m_leftCol->addWidget(makeCard(QStringLiteral("BUDDHABROT"), &b));
+        auto* g = cardGrid();
+        int r = 0;
+        g->addWidget(new QLabel(QStringLiteral("Coloring")), r, 0);
+        m_buddhaColoring = new QComboBox;
+        m_buddhaColoring->addItems({QStringLiteral("Palette"), QStringLiteral("Nebulabrot")});
+        m_buddhaColoring->setProperty("testId", QStringLiteral("buddhaColoring"));
+        m_buddhaColoring->setToolTip(QStringLiteral("Nebulabrot: red, green and blue each count the orbits that escape "
+                                                    "within their own limit. Palette: all the counts through the palette."));
+        g->addWidget(m_buddhaColoring, r++, 1, 1, 2);
+        auto limitRow = [&](const QString& label, const QString& id, double def, const QString& tip) {
+            auto* row = new SliderRow(label, 10, 100000, def, 0, QString(), true, tip, this);
+            row->setTestId(id);
+            row->addTo(g, r++);
+            return row;
+        };
+        m_buddhaRed = limitRow(QStringLiteral("Red Limit"), QStringLiteral("buddhaRed"), 5000,
+                               QStringLiteral("Orbits that escape within this many steps count in red (in Palette coloring, "
+                                              "in the brightest part). Changing it counts again."));
+        m_buddhaGreen = limitRow(QStringLiteral("Green Limit"), QStringLiteral("buddhaGreen"), 500,
+                                 QStringLiteral("The same for green. Changing it counts again."));
+        m_buddhaBlue = limitRow(QStringLiteral("Blue Limit"), QStringLiteral("buddhaBlue"), 50,
+                                QStringLiteral("The same for blue. Changing it counts again."));
+        m_buddhaMin = new SliderRow(QStringLiteral("Fewest Steps"), 0, 1000, 0, 0, QString(), false,
+                                    QStringLiteral("Orbits that escape sooner aren't counted: higher values leave only the "
+                                                   "long, ghostly paths. Changing it counts again."), this);
+        m_buddhaMin->setTestId(QStringLiteral("buddhaMin"));
+        m_buddhaMin->addTo(g, r++);
+        b->addLayout(g);
+        sliderGrid("BUDDHABROT", b);
+        auto* hint = new QLabel(QStringLiteral("The picture gets smoother the longer it counts. Zoom in only a little: "
+                                               "deep views get few orbits."));
+        hint->setObjectName(QStringLiteral("muted"));
+        hint->setWordWrap(true);
+        b->addWidget(hint);
+        connect(m_buddhaColoring, &QComboBox::currentIndexChanged, this, [this](int i) {
+            if (m_syncing) return;
+            m_colors.buddhaNebula = i;
+            colorsEdited();
+        });
+        auto limitEdited = [this](int* field) {
+            return [this, field](double v) {
+                *field = int(std::lround(v));
+                fractalEdited();
+            };
+        };
+        connect(m_buddhaRed, &SliderRow::valueChanged, this, limitEdited(&m_fractal.buddhaRed));
+        connect(m_buddhaGreen, &SliderRow::valueChanged, this, limitEdited(&m_fractal.buddhaGreen));
+        connect(m_buddhaBlue, &SliderRow::valueChanged, this, limitEdited(&m_fractal.buddhaBlue));
+        connect(m_buddhaMin, &SliderRow::valueChanged, this, limitEdited(&m_fractal.buddhaMin));
+    }
     m_leftCol->addWidget(buildColorCard());
     {
         QVBoxLayout* b = nullptr;
@@ -1167,9 +1224,14 @@ void MainWindow::buildPlaces(QVBoxLayout* body)
 void MainWindow::syncControls()
 {
     m_syncing = true;
-    m_type->setCurrentIndex(m_fractal.julia() ? 1 : 0);
+    m_type->setCurrentIndex(int(m_fractal.type));
     m_power->setValue(m_fractal.power);
     m_formula->setCurrentIndex(int(m_fractal.formula));
+    m_buddhaColoring->setCurrentIndex(m_colors.buddhaNebula);
+    m_buddhaRed->setValue(m_fractal.buddhaRed);
+    m_buddhaGreen->setValue(m_fractal.buddhaGreen);
+    m_buddhaBlue->setValue(m_fractal.buddhaBlue);
+    m_buddhaMin->setValue(m_fractal.buddhaMin);
     m_power->setEnabled(m_fractal.formula != core::Formula::BurningShip);
     m_escape->setValue(m_fractal.escapeRadius);
     m_autoIter->setChecked(m_fractal.autoIterations);
@@ -1235,6 +1297,8 @@ void MainWindow::updateStyleVisibility()
     m_in2Label->setVisible(two);
     m_seedBox->setVisible(m_fractal.julia());
     m_juliaHint->setVisible(!m_fractal.julia());
+    if (m_cards.contains(QStringLiteral("BUDDHABROT")))
+        m_cards[QStringLiteral("BUDDHABROT")].frame->setVisible(m_fractal.buddhabrot());
     // Settings that only shape an effect wait, grayed, until the effect is on.
     auto enable = [this](const char* key, bool on) {
         if (SliderRow* r = m_rows.value(QString::fromLatin1(key))) r->setEnabled(on);
@@ -1639,7 +1703,7 @@ void MainWindow::switchFormula(core::Formula f)
 
 void MainWindow::switchToJulia(const QString& re, const QString& im)
 {
-    if (!m_fractal.julia()) m_lastMandelbrotView = m_view->view();
+    if (m_fractal.type == core::FractalType::Mandelbrot) m_lastMandelbrotView = m_view->view();
     finishEdit();
     noteEdit();
     m_fractal.type = core::FractalType::Julia;
@@ -1665,6 +1729,22 @@ void MainWindow::switchToMandelbrot()
     finishEdit();
     m_view->setView(m_lastMandelbrotView);
     rememberView();
+    saveSettingsSoon();
+}
+
+void MainWindow::switchToBuddhabrot()
+{
+    if (m_fractal.type == core::FractalType::Mandelbrot) m_lastMandelbrotView = m_view->view();
+    setAutopilot(false);
+    finishEdit();
+    noteEdit();
+    m_fractal.type = core::FractalType::Buddhabrot;
+    syncControls();
+    m_view->setFractal(m_fractal);
+    finishEdit();
+    m_view->setView(m_fractal.home());
+    rememberView();
+    log(QStringLiteral("Buddhabrot: the picture fills in as more orbits are counted."));
     saveSettingsSoon();
 }
 
@@ -1803,6 +1883,11 @@ bool MainWindow::savePictureTo(const QString& f, int w, int h, int ss, QString* 
 
 void MainWindow::setAutopilot(bool on)
 {
+    if (on && m_fractal.buddhabrot()) {
+        log(QStringLiteral("The autopilot flies through the Mandelbrot and Julia sets; the Buddhabrot stays shallow."));
+        updateAnimationButtons();
+        return;
+    }
     m_view->setAutopilot(on);
     if (on && !m_view->autopilot() && !m_view->gpuReady()) log(QStringLiteral("The autopilot needs the graphics card renderer."));
 }
@@ -1931,8 +2016,11 @@ bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QStr
     auto frame = [&](int i, QImage* out) {
         QString e;
         m_view->setColors(colorsAt(s.loop ? double(i) / n : 0.0));
-        *out = m_view->renderPicture(viewAt(i), s.size.width(), s.size.height(), s.samplesPerSide, &e,
-                                     [&](double) { return !progress || progress(done, total); }, double(i) / s.fps);
+        auto goOn = [&](double) { return !progress || progress(done, total); };
+        *out = s.keyframes ? m_view->renderMovieFrame(viewAt(i), s.size.width(), s.size.height(), s.samplesPerSide,
+                                                      double(i) / s.fps, &e, goOn)
+                           : m_view->renderPicture(viewAt(i), s.size.width(), s.size.height(), s.samplesPerSide, &e,
+                                                   goOn, double(i) / s.fps);
         if (out->isNull()) {
             if (e == QStringLiteral("Cancelled.")) cancelled = true;
             err = e;
@@ -1979,12 +2067,14 @@ bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QStr
         if (error) *error = err;
         return false;
     }
-    log(QStringLiteral("Saved a %1-frame %2 to %3 (%4 × %5, %6 s to render).")
+    log(QStringLiteral("Saved a %1-frame %2 to %3 (%4 × %5, %6 s to render%7).")
             .arg(QLocale().toString(n))
             .arg(s.loop ? QStringLiteral("seamless loop") : QStringLiteral("zoom"))
             .arg(QDir::toNativeSeparators(path))
             .arg(s.size.width()).arg(s.size.height())
-            .arg(QLocale().toString(timer.elapsed() / 1000.0, 'f', 1)));
+            .arg(QLocale().toString(timer.elapsed() / 1000.0, 'f', 1))
+            .arg(s.keyframes && m_view->movieKeyframes() > 0
+                     ? QStringLiteral(", %1 keyframes").arg(m_view->movieKeyframes()) : QString()));
     return true;
 }
 

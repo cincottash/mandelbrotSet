@@ -133,7 +133,23 @@ bool GpuEngine::init(QString* error)
             const unsigned sp = v2 ? compile(QStringLiteral("sphere"), head + sphereSrc, GL_FRAGMENT_SHADER, &err) : 0;
             m_progSphere = sp ? link({v2, sp}, &err) : 0;
         }
-        if (!m_progBloom || !m_progSphere) {
+        if (m_progSphere) {
+            const unsigned rs = compile(QStringLiteral("resample"), head + loadShader(QStringLiteral("resample.comp")),
+                                        GL_COMPUTE_SHADER, &err);
+            m_progResample = rs ? link({rs}, &err) : 0;
+        }
+        if (m_progResample) {
+            const unsigned bc = compile(QStringLiteral("buddha"), head + loadShader(QStringLiteral("buddha.comp")),
+                                        GL_COMPUTE_SHADER, &err);
+            m_progBuddha = bc ? link({bc}, &err) : 0;
+        }
+        if (m_progBuddha) {
+            const unsigned v3 = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
+            const unsigned bf = v3 ? compile(QStringLiteral("buddha colors"), head + loadShader(QStringLiteral("buddha.frag")),
+                                             GL_FRAGMENT_SHADER, &err) : 0;
+            m_progBuddhaColor = bf ? link({v3, bf}, &err) : 0;
+        }
+        if (!m_progBloom || !m_progSphere || !m_progResample || !m_progBuddha || !m_progBuddhaColor) {
             glDeleteProgram(m_progDisplay);
             m_progDisplay = 0;
         }
@@ -180,8 +196,12 @@ bool GpuEngine::init(QString* error)
 void GpuEngine::release()
 {
     if (!QOpenGLContext::currentContext()) return;
-    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay, &m_progBloom, &m_progSphere})
+    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay, &m_progBloom, &m_progSphere, &m_progResample,
+                        &m_progBuddha, &m_progBuddhaColor})
         if (*p) { glDeleteProgram(*p); *p = 0; }
+    for (unsigned* b : {&m_buddhaHist, &m_buddhaMax})
+        if (*b) { glDeleteBuffers(1, b); *b = 0; }
+    m_buddhaW = m_buddhaH = 0;
     freeTarget(m_scratch);
     for (int i = 0; i < 2; ++i) {
         if (m_bloomFbo[i]) { glDeleteFramebuffers(1, &m_bloomFbo[i]); m_bloomFbo[i] = 0; }
@@ -241,6 +261,169 @@ void GpuEngine::ensureFrameTextures(RawFrame& f, int w, int h)
     f.tex1 = t[1];
     f.allocW = aw;
     f.allocH = ah;
+}
+
+bool GpuEngine::resample(const RawFrame& key, const core::View& frameView, int outW, int outH, int ss, RawFrame& out)
+{
+    if (!m_ready || !key.tex0 || key.rawW < 2 || key.rawH < 2) return false;
+    ss = std::max(1, ss);
+    const int rw = std::max(1, outW) * ss, rh = std::max(1, outH) * ss;
+    // Frame view units to keyframe view units: w = s R(a) q + T.
+    const double s = (frameView.scale / key.view.scale).toDouble();
+    const double a = frameView.angle - key.view.angle;
+    const core::ComplexExp off = frameView.centerOffsetFrom(key.view.cx, key.view.cy) * (core::FloatExp(1.0) / key.view.scale);
+    const std::complex<double> d = off.toComplex() * std::polar(1.0, -key.view.angle);
+    if (!std::isfinite(s) || !std::isfinite(d.real()) || !std::isfinite(d.imag())) return false;
+    ensureFrameTextures(out, rw, rh);
+    out.view = frameView;
+    out.pass = key.pass;
+    out.pass.view = frameView;
+    out.pass.outW = outW;
+    out.pass.outH = outH;
+    out.pass.ss = ss;
+    out.ss = ss;
+    out.outW = outW;
+    out.outH = outH;
+    out.rawW = rw;
+    out.rawH = rh;
+    out.maxIterations = key.maxIterations;
+    out.stats = key.stats;
+    out.complete = true;
+    glUseProgram(m_progResample);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progResample, n); };
+    glBindImageTexture(0, out.tex0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+    glBindImageTexture(1, out.tex1, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, key.tex0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, key.tex1);
+    glUniform1i(loc("uKey0"), 0);
+    glUniform1i(loc("uKey1"), 1);
+    glUniform2i(loc("uKeySize"), key.rawW, key.rawH);
+    glUniform2i(loc("uSize"), rw, rh);
+    glUniform2f(loc("uM"), float(s * std::cos(a)), float(s * std::sin(a)));
+    glUniform2f(loc("uT"), float(d.real()), float(d.imag()));
+    glUniform1f(loc("uDeScale"), float(s * double(key.rawH) / double(rh)));
+    glUniform2f(loc("uNormalRot"), float(std::cos(-a)), float(std::sin(-a)));
+    glDispatchCompute(GLuint((rw + 7) / 8), GLuint((rh + 7) / 8), 1);
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    return true;
+}
+
+void GpuEngine::buddhaReset(int w, int h)
+{
+    w = std::max(w, 1);
+    h = std::max(h, 1);
+    if (!m_buddhaHist) glGenBuffers(1, &m_buddhaHist);
+    if (!m_buddhaMax) glGenBuffers(1, &m_buddhaMax);
+    const quint32 zero = 0;
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_buddhaHist);
+    if (w != m_buddhaW || h != m_buddhaH) {
+        glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(w) * h * 3 * 4, nullptr, GL_DYNAMIC_COPY);
+        m_buddhaW = w;
+        m_buddhaH = h;
+    }
+    glClearBufferData(GL_SHADER_STORAGE_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &zero);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_buddhaMax);
+    const quint32 zeros[4] = {0, 0, 0, 0};
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(zeros), zeros, GL_DYNAMIC_COPY);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+}
+
+qint64 GpuEngine::buddhaAccumulate(const BuddhaParams& p, double budgetMs)
+{
+    if (!m_ready || !m_buddhaHist || p.w != m_buddhaW || p.h != m_buddhaH) return 0;
+    const int maxLimit = std::max({p.limits[0], p.limits[1], p.limits[2], 1});
+    // At worst every orbit runs the limit twice: keep one dispatch under the same work cap as the main renderer.
+    const qint64 perDispatch = std::clamp<qint64>(qint64(kWorkCap / 4.0 / (2.0 * maxLimit)) / 64 * 64, 4096, 1 << 22);
+    glUseProgram(m_progBuddha);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progBuddha, n); };
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_buddhaHist);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_buddhaMax);
+    glUniform2i(loc("uSize"), p.w, p.h);
+    glUniform2f(loc("uCenter"), float(p.cx), float(p.cy));
+    glUniform1f(loc("uInvScale"), float(1.0 / p.scale));
+    glUniform2f(loc("uRot"), float(std::cos(-p.angle)), float(std::sin(-p.angle)));
+    glUniform3i(loc("uLimits"), p.limits[0], p.limits[1], p.limits[2]);
+    glUniform1i(loc("uMaxLimit"), maxLimit);
+    glUniform1i(loc("uMinIter"), p.minIter);
+    glUniform1i(loc("uFormula"), p.formula);
+    glUniform1i(loc("uPower"), p.power);
+    glUniform2f(loc("uBoxMin"), float(p.boxX), float(p.boxY));
+    glUniform2f(loc("uBoxSize"), float(p.boxW), float(p.boxH));
+    glUniform1i(loc("uSkipBulbs"), p.formula == 0 && p.power == 2 ? 1 : 0);
+    QElapsedTimer t;
+    t.start();
+    qint64 done = 0;
+    do {
+        glUniform1ui(loc("uSeed"), m_buddhaSeed++ * 0x9E3779B9u);
+        glDispatchCompute(GLuint(perDispatch / 64), 1, 1);
+        glFinish();
+        done += perDispatch;
+    } while (t.nsecsElapsed() / 1e6 < budgetMs * 0.8);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    glUseProgram(0);
+    return done;
+}
+
+void GpuEngine::buddhaColorize(const BuddhaParams& p, const core::ColorParams& c, ColorTarget& target)
+{
+    if (!m_ready || !m_buddhaHist || p.w != m_buddhaW || p.h != m_buddhaH) return;
+    ensureTarget(target, p.w, p.h);
+    GLint prevFbo = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
+    glViewport(0, 0, target.w, target.h);
+    glDisable(GL_BLEND);
+    glUseProgram(m_progBuddhaColor);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progBuddhaColor, n); };
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, m_buddhaHist);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, m_buddhaMax);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_paletteTex);
+    glUniform1i(loc("uPalette"), 0);
+    glUniform2i(loc("uSize"), p.w, p.h);
+    glUniform1i(loc("uNebula"), c.buddhaNebula ? 1 : 0);
+    glUniform1f(loc("uExposure"), float(c.buddhaExposure));
+    glUniform1f(loc("uGamma"), float(c.buddhaGamma));
+    glUniform1f(loc("uDensity"), float(c.density));
+    glUniform1f(loc("uOffset"), float(c.offset));
+    glUniform3f(loc("uBg"), float(c.interiorColor.redF()), float(c.interiorColor.greenF()), float(c.interiorColor.blueF()));
+    glBindVertexArray(m_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    if (c.sphereSize > 0) sphere(target, c);
+    if (c.bloom > 0) bloom(target, c);
+    glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
+    target.valid = true;
+    target.fixed = c.sphereSize > 0;
+}
+
+bool GpuEngine::keyCovers(const RawFrame& key, const core::View& frameView, int outW, int outH, double minDensity) const
+{
+    if (!key.tex0 || key.rawW < 2) return false;
+    const double s = (frameView.scale / key.view.scale).toDouble();
+    if (!std::isfinite(s) || s <= 0) return false;
+    // Keyframe raw pixels per frame (output) pixel: the frame spans s keyframe heights' worth of the plane.
+    const double density = double(key.rawH) * s / double(outH);
+    if (density < minDensity || density > minDensity * 8.0) return false;
+    const double a = frameView.angle - key.view.angle;
+    const core::ComplexExp off = frameView.centerOffsetFrom(key.view.cx, key.view.cy) * (core::FloatExp(1.0) / key.view.scale);
+    const std::complex<double> d = off.toComplex() * std::polar(1.0, -key.view.angle);
+    const double aspect = double(outW) / double(std::max(outH, 1)), keyAspect = double(key.rawW) / double(key.rawH);
+    for (double cu : {-aspect, aspect})
+        for (double cv : {-1.0, 1.0}) {
+            const std::complex<double> w = s * std::polar(1.0, a) * std::complex<double>(cu, cv) + d;
+            if (std::abs(w.real()) > keyAspect * 0.995 || std::abs(w.imag()) > 0.995) return false;
+        }
+    return true;
 }
 
 void GpuEngine::freeFrame(RawFrame& f)

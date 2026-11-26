@@ -148,6 +148,7 @@ private:
     void switchToJulia(const QString& re, const QString& im);
     void switchToMandelbrot();
     void switchFormula(core::Formula f);
+    void switchToBuddhabrot();
 
     void loadPlaces();
     void savePlaces();
@@ -179,6 +180,12 @@ private:
     // FRACTAL
     QComboBox* m_type = nullptr;
     QComboBox* m_formula = nullptr;
+    // BUDDHABROT
+    QComboBox* m_buddhaColoring = nullptr;
+    SliderRow* m_buddhaRed = nullptr;
+    SliderRow* m_buddhaGreen = nullptr;
+    SliderRow* m_buddhaBlue = nullptr;
+    SliderRow* m_buddhaMin = nullptr;
     SliderRow* m_power = nullptr;
     SliderRow* m_escape = nullptr;
     QCheckBox* m_autoIter = nullptr;

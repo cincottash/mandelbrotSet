@@ -1,5 +1,6 @@
 #include "Fractal.h"
 
+#include <QJsonArray>
 #include <QJsonValue>
 
 #include <algorithm>
@@ -27,7 +28,13 @@ static const char* const kFormulaKeys[] = {"classic", "burning_ship", "tricorn"}
 View FractalParams::home() const
 {
     View v = View::home(julia());
-    if (!julia() && formula == Formula::BurningShip) {
+    if (buddhabrot() && formula == Formula::Classic) {
+        // The classic Buddhabrot sits upright: the set turned a quarter turn, its antenna up as the head.
+        v.cx = BigFloat(-0.4, 128);
+        v.cy = BigFloat(0.0, 128);
+        v.scale = FloatExp(1.45);
+        v.angle = std::acos(0.0);
+    } else if (!julia() && formula == Formula::BurningShip) {
         v.cx = BigFloat(-0.45, 128);
         v.cy = BigFloat(0.5, 128);
     } else if (!julia() && formula == Formula::Tricorn) {
@@ -52,7 +59,11 @@ QString FractalParams::name() const
 QJsonObject FractalParams::toJson() const
 {
     QJsonObject o;
-    o.insert(QStringLiteral("type"), type == FractalType::Julia ? QStringLiteral("julia") : QStringLiteral("mandelbrot"));
+    o.insert(QStringLiteral("type"), type == FractalType::Julia        ? QStringLiteral("julia")
+                                     : type == FractalType::Buddhabrot ? QStringLiteral("buddhabrot")
+                                                                       : QStringLiteral("mandelbrot"));
+    o.insert(QStringLiteral("buddha_limits"), QJsonArray{buddhaRed, buddhaGreen, buddhaBlue});
+    o.insert(QStringLiteral("buddha_min"), buddhaMin);
     o.insert(QStringLiteral("formula"), QLatin1String(kFormulaKeys[int(formula)]));
     o.insert(QStringLiteral("power"), power);
     o.insert(QStringLiteral("julia_re"), juliaRe);
@@ -67,7 +78,15 @@ void FractalParams::fromJson(const QJsonObject& o)
 {
     const FractalParams d;
     const QString t = o.value(QStringLiteral("type")).toString();
-    type = t == QStringLiteral("julia") ? FractalType::Julia : FractalType::Mandelbrot;
+    type = t == QStringLiteral("julia")        ? FractalType::Julia
+           : t == QStringLiteral("buddhabrot") ? FractalType::Buddhabrot
+                                               : FractalType::Mandelbrot;
+    const QJsonArray lim = o.value(QStringLiteral("buddha_limits")).toArray();
+    auto limit = [&](int i, int def) { return std::clamp(lim.at(i).toInt(def), 2, 200000); };
+    buddhaRed = limit(0, d.buddhaRed);
+    buddhaGreen = limit(1, d.buddhaGreen);
+    buddhaBlue = limit(2, d.buddhaBlue);
+    buddhaMin = std::clamp(o.value(QStringLiteral("buddha_min")).toInt(d.buddhaMin), 0, 10000);
     const QString fk = o.value(QStringLiteral("formula")).toString();
     formula = d.formula;
     for (int i = 0; i < 3; ++i)

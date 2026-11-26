@@ -73,6 +73,11 @@ const QList<SliderSpec>& sliderSpecs()
         {"bloom_threshold", "Bloom Threshold", "EFFECTS", "How bright a color must be to glow. Lower makes more of the picture glow.",
          0.0, 1.0, 0.6, 2, "", false, false, &C::bloomThreshold, 0},
 
+        {"buddha_exposure", "Exposure", "BUDDHABROT", "How bright the counted orbits shine. Higher shows the faint ones.",
+         0.1, 10.0, 1.0, 2, "", true, false, &C::buddhaExposure, 0},
+        {"buddha_gamma", "Gamma", "BUDDHABROT", "Below 0.5 brings out the faint orbits; above, only the busiest paths stay bright.",
+         0.15, 2.0, 0.5, 2, "", true, false, &C::buddhaGamma, 0},
+
         {"sphere_size", "Ball Size", "SPHERE", "Wraps the picture onto a ball this big (a share of the picture's height). 0 keeps it flat.",
          0.0, 0.98, 0.0, 2, "", false, false, &C::sphereSize, 0},
         {"sphere_shade", "Ball Shading", "SPHERE", "How much the light (from the LIGHTING card's direction) rounds the ball.",
@@ -122,6 +127,7 @@ QJsonObject ColorParams::toJson() const
     if (isCustomPalette(palette)) o.insert(QStringLiteral("palette_stops"), paletteByName(palette).stopsJson());
     o.insert(QStringLiteral("color_scale"), colorScale);
     o.insert(QStringLiteral("trap_shape"), trapShape);
+    o.insert(QStringLiteral("buddha_nebula"), buddhaNebula);
     for (const SliderSpec& s : sliderSpecs()) o.insert(QLatin1String(s.key), this->*(s.member));
     o.insert(QStringLiteral("moire_tint"), colorText(moireTint));
     o.insert(QStringLiteral("edge_color"), colorText(edgeColor));
@@ -146,6 +152,7 @@ void ColorParams::fromJson(const QJsonObject& o)
     palette = paletteByName(pname).name;
     colorScale = std::clamp(o.value(QStringLiteral("color_scale")).toInt(d.colorScale), 0, 2);
     trapShape = std::clamp(o.value(QStringLiteral("trap_shape")).toInt(d.trapShape), 0, int(trapShapeNames().size()) - 1);
+    buddhaNebula = std::clamp(o.value(QStringLiteral("buddha_nebula")).toInt(d.buddhaNebula), 0, 1);
     for (const SliderSpec& s : sliderSpecs()) {
         const double v = o.value(QLatin1String(s.key)).toDouble(d.*(s.member));
         this->*(s.member) = std::isfinite(v) ? std::clamp(v, s.min, s.max) : d.*(s.member);
