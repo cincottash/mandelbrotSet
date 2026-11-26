@@ -86,6 +86,7 @@ animated GIF or PNG frames, at any size up to 4K (8K and more as frames). **Seam
 view and zooms along the exact path into it. The mini copy looks like the whole set, the colors are matched at
 both ends and the wrap is blended, so the movie repeats forever. Movies are made from keyframes (two per halving
 of the view, each a little larger and finer than a frame), so they render several times faster than frame by frame.
+**Full Quality** computes every frame on its own instead, for the sharpest finest detail.
 
 <br clear="right">
 
@@ -118,6 +119,7 @@ mandelbrotSet.exe [location.json]                       open a location
 mandelbrotSet.exe --render location.json --out picture.png [--size 3840x2160] [--anti-aliasing 2]
 mandelbrotSet.exe --record location.json --out zoom.mp4 [--size 1920x1080] [--seconds 20] [--fps 30]
                   [--anti-aliasing 2] [--loop]          a zoom movie (.mp4, .webp, .gif, or a folder for PNG frames)
+                  [--full-quality]                      every frame computed on its own (slower)
 mandelbrotSet.exe --screenshot window.png               a picture of the window (no dialogs; for checks)
 mandelbrotSet.exe --data-folder FOLDER                  keep settings in FOLDER for this run
 ```

@@ -145,7 +145,8 @@ int main(int argc, char* argv[])
     QCommandLineOption seconds(QStringLiteral("seconds"), QStringLiteral("The movie's length for --record (default 20)."), QStringLiteral("S"), QStringLiteral("20"));
     QCommandLineOption fps(QStringLiteral("fps"), QStringLiteral("Frames per second for --record (default 30)."), QStringLiteral("N"), QStringLiteral("30"));
     QCommandLineOption loop(QStringLiteral("loop"), QStringLiteral("With --record: a seamless loop into the mini Mandelbrot nearest the location's center."));
-    cli.addOptions({dataFolder, screenshot, render, out, size, aa, record, seconds, fps, loop});
+    QCommandLineOption fullQuality(QStringLiteral("full-quality"), QStringLiteral("With --record: compute every frame on its own instead of taking frames from keyframes (several times slower)."));
+    cli.addOptions({dataFolder, screenshot, render, out, size, aa, record, seconds, fps, loop, fullQuality});
     cli.addPositionalArgument(QStringLiteral("location"), QStringLiteral("A location file to open."));
     cli.process(app);
 
@@ -192,6 +193,7 @@ int main(int argc, char* argv[])
         rs.fps = std::clamp(cli.value(fps).toInt(), 1, 240);
         rs.size = sz;
         rs.samplesPerSide = std::clamp(cli.value(aa).toInt(), 1, 4);
+        rs.keyframes = !cli.isSet(fullQuality);
         const QString o = cli.value(out);
         rs.format = MovieWriter::fromPath(o);
         rs.from = loc.fractal.home();

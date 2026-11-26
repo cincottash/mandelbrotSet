@@ -13,6 +13,7 @@
 #include <atomic>
 #include <memory>
 
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -56,6 +57,7 @@ private:
     QSpinBox* m_w = nullptr;
     QSpinBox* m_h = nullptr;
     QComboBox* m_aa = nullptr;
+    QCheckBox* m_fullQuality = nullptr;
     QComboBox* m_format = nullptr;
     QLabel* m_info = nullptr;
     QPushButton* m_ok = nullptr;
