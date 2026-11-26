@@ -16,7 +16,8 @@ constexpr unsigned kMoire = 1u << int(ColorStyle::Moire);
 constexpr unsigned kDistance = 1u << int(ColorStyle::Distance);
 constexpr unsigned kStripes = 1u << int(ColorStyle::Stripes);
 constexpr unsigned kAngle = 1u << int(ColorStyle::Angle);
-constexpr unsigned kBanded = kGradient | kSine | kDistance | kStripes | kAngle;
+constexpr unsigned kTrap = 1u << int(ColorStyle::OrbitTrap);
+constexpr unsigned kBanded = kGradient | kSine | kDistance | kStripes | kAngle | kTrap;
 }  // namespace
 
 const QList<SliderSpec>& sliderSpecs()
@@ -33,6 +34,12 @@ const QList<SliderSpec>& sliderSpecs()
         {"moire_scale", "Pattern Scale", "COLOR",
          "The fabric pattern's frequency. 1 matches the original Python renders pixel for pixel.",
          0.05, 4.0, 1.0, 3, "", true, false, &C::moireScale, kMoire},
+        {"trap_x", "Trap X", "COLOR", "Where the trap sits, across. Changing it renders the view again.",
+         -2.0, 2.0, 0.0, 2, "", false, true, &C::trapX, kTrap},
+        {"trap_y", "Trap Y", "COLOR", "Where the trap sits, up and down. Changing it renders the view again.",
+         -2.0, 2.0, 0.0, 2, "", false, true, &C::trapY, kTrap},
+        {"trap_size", "Circle Radius", "COLOR", "The circle trap's radius. Changing it renders the view again.",
+         0.05, 4.0, 1.0, 2, "", true, true, &C::trapSize, kTrap},
 
         {"sine_freq_r", "Red Frequency", "SINE WAVES", "How many red waves pass per palette turn.", 0.0, 5.0, 1.0, 2, "", false, false, &C::sineFreqR, kSine},
         {"sine_freq_g", "Green Frequency", "SINE WAVES", "How many green waves pass per palette turn.", 0.0, 5.0, 1.0, 2, "", false, false, &C::sineFreqG, kSine},
@@ -86,7 +93,12 @@ const SliderSpec* sliderSpec(const QString& key)
 QStringList styleNames()
 {
     return {QStringLiteral("Smooth Gradient"), QStringLiteral("Sine Waves"), QStringLiteral("Moiré Fabric"),
-            QStringLiteral("Distance Bands"), QStringLiteral("Stripes"), QStringLiteral("Angle")};
+            QStringLiteral("Distance Bands"), QStringLiteral("Stripes"), QStringLiteral("Angle"), QStringLiteral("Orbit Trap")};
+}
+
+QStringList trapShapeNames()
+{
+    return {QStringLiteral("Point"), QStringLiteral("Cross"), QStringLiteral("Circle")};
 }
 
 QStringList interiorStyleNames()
@@ -107,6 +119,7 @@ QJsonObject ColorParams::toJson() const
     o.insert(QStringLiteral("style"), style);
     o.insert(QStringLiteral("palette"), palette);
     o.insert(QStringLiteral("color_scale"), colorScale);
+    o.insert(QStringLiteral("trap_shape"), trapShape);
     for (const SliderSpec& s : sliderSpecs()) o.insert(QLatin1String(s.key), this->*(s.member));
     o.insert(QStringLiteral("moire_tint"), colorText(moireTint));
     o.insert(QStringLiteral("edge_color"), colorText(edgeColor));
@@ -123,6 +136,7 @@ void ColorParams::fromJson(const QJsonObject& o)
     style = std::clamp(o.value(QStringLiteral("style")).toInt(d.style), 0, int(styleNames().size()) - 1);
     palette = paletteByName(o.value(QStringLiteral("palette")).toString(d.palette)).name;
     colorScale = std::clamp(o.value(QStringLiteral("color_scale")).toInt(d.colorScale), 0, 2);
+    trapShape = std::clamp(o.value(QStringLiteral("trap_shape")).toInt(d.trapShape), 0, int(trapShapeNames().size()) - 1);
     for (const SliderSpec& s : sliderSpecs()) {
         const double v = o.value(QLatin1String(s.key)).toDouble(d.*(s.member));
         this->*(s.member) = std::isfinite(v) ? std::clamp(v, s.min, s.max) : d.*(s.member);

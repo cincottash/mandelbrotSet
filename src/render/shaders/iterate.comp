@@ -49,6 +49,19 @@ uniform int uBlaOffset[32];
 uniform int uBlaCount[32];
 uniform bool uStripe;
 uniform float uStripeDensity;
+// Orbit trap: the closest the orbit comes to a shape (-1 off, 0 point, 1 cross, 2 circle), kept where the stripes
+// average would be (the two styles never run together).
+uniform int uTrap;
+uniform vec2 uTrapC;
+uniform float uTrapR;
+
+float trapDist(vec2 z)
+{
+    vec2 d = z - uTrapC;
+    if (uTrap == 0) return length(d);
+    if (uTrap == 1) return min(abs(d.x), abs(d.y));
+    return abs(length(d) - uTrapR);
+}
 uniform int uIterBudget;      // iterations a pixel may run in this dispatch
 uniform bool uResume;         // go on from the saved state (a later dispatch of the same tile)
 uniform int uStateBase;       // the tile's first pixel slot in the state buffer
@@ -217,7 +230,7 @@ void main()
     int De = uScaleE;
     float firstR = 0.0;
     float minR2 = BIG;
-    float stripe = 0.0, stripePrev = 0.0;
+    float stripe = uTrap >= 0 ? BIG : 0.0, stripePrev = 0.0;
     int stripeCount = 0;
     bool finished = true;   // false: the budget ran out first; the state is saved for the next dispatch
     bool skip = false;      // finished in an earlier dispatch of this tile: nothing to do
@@ -330,6 +343,7 @@ void main()
                     r2 = dot(z, z);
                     if (r2 > uBailout2) { inside = false; break; }
                     minR2 = min(minR2, r2);
+                    if (uTrap >= 0) stripe = min(stripe, trapDist(z));
                     if (fcLog2(zX) < fcLog2(dzX) || m >= uRefLen) {
                         if (m >= uRefLen && uRefEscaped) glitch = true;
                         dzX = rebaseX(m, dzX);
@@ -357,6 +371,7 @@ void main()
                     r2 = dot(z, z);
                     if (r2 > uBailout2) { inside = false; break; }
                     minR2 = min(minR2, r2);
+                    if (uTrap >= 0) stripe = min(stripe, trapDist(z));
                     if (infNorm(z) < infNorm(dz) || m >= uRefLen) {
                         if (m >= uRefLen && uRefEscaped) glitch = true;
                         dz = rebaseF(m, dz);
@@ -463,6 +478,7 @@ void main()
 #endif
             if (firstR == 0.0 && r2 > 4.0) firstR = sqrt(r2);
             minR2 = min(minR2, r2);
+            if (uTrap >= 0) stripe = min(stripe, trapDist(z));
             if (uStripe) {
                 stripePrev = stripe;
                 float s = 0.5 + 0.5 * sin(uStripeDensity * atan(z.y, z.x));
@@ -508,7 +524,7 @@ void main()
             float de = exp2(clamp(l2de, -60.0, 60.0));
             float ul = length(u);
             vec2 nrm = ul > 0.0 ? u / ul : vec2(0.0);
-            float stripeV = mix(stripePrev, stripe, clamp(fract(mu), 0.0, 1.0));
+            float stripeV = uTrap >= 0 ? stripe : mix(stripePrev, stripe, clamp(fract(mu), 0.0, 1.0));
             o0 = vec4(mu, de, nrm);
             o1 = vec4(firstR, atan(z.y, z.x), stripeV, 0.0);
         }

@@ -187,6 +187,8 @@ private:
     QLabel* m_scaleLabel = nullptr;
     ColorButton* m_moireTint = nullptr;
     QLabel* m_moireTintLabel = nullptr;
+    QComboBox* m_trapShape = nullptr;
+    QLabel* m_trapShapeLabel = nullptr;
     ColorButton* m_edgeColor = nullptr;
     QComboBox* m_interior = nullptr;
     ColorButton* m_in1 = nullptr;

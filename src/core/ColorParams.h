@@ -9,7 +9,8 @@
 
 namespace core {
 
-enum class ColorStyle { Gradient = 0, SineWaves = 1, Moire = 2, Distance = 3, Stripes = 4, Angle = 5 };
+enum class ColorStyle { Gradient = 0, SineWaves = 1, Moire = 2, Distance = 3, Stripes = 4, Angle = 5, OrbitTrap = 6 };
+enum class TrapShape { Point = 0, Cross = 1, Circle = 2 };
 enum class InteriorStyle { Solid = 0, Diagonal = 1, Depth = 2 };
 
 struct ColorParams {
@@ -38,6 +39,10 @@ struct ColorParams {
     QColor edgeColor{0xFF, 0xFF, 0xFF};
 
     double stripeDensity = 5.0;    // needs a new render
+
+    // Orbit trap (needs a new render): the closest each orbit comes to a point, a cross or a circle.
+    int trapShape = int(TrapShape::Cross);
+    double trapX = 0.0, trapY = 0.0, trapSize = 1.0;   // the shape's center; the circle's radius
 
     int interiorStyle = int(InteriorStyle::Solid);
     QColor interiorColor{0x00, 0x00, 0x00};
@@ -76,6 +81,7 @@ const QList<SliderSpec>& sliderSpecs();
 const SliderSpec* sliderSpec(const QString& key);
 QStringList styleNames();          // index = ColorStyle
 QStringList interiorStyleNames();  // index = InteriorStyle
+QStringList trapShapeNames();      // index = TrapShape
 QStringList colorScaleNames();
 
 // Ready-made looks: a full set of color settings each.

@@ -214,7 +214,8 @@ void tameColors(ColorParams& c, double mu, double step)
         const double d = c.density;
         switch (ColorStyle(c.style)) {
         case ColorStyle::Distance:
-        case ColorStyle::Moire: return 0.0;                     // follow the distance or the pixel grid: smooth
+        case ColorStyle::OrbitTrap:
+        case ColorStyle::Moire: return 0.0;                     // follow the distance, the trap or the pixel grid
         case ColorStyle::Angle: return step * d;                // the final angle turns once per unit of mu
         case ColorStyle::Stripes: return step * d * 0.5;
         default: break;
@@ -240,7 +241,11 @@ void tameColors(ColorParams& c, double mu, double step)
 ColorParams randomColors(QRandomGenerator& rnd, const ColorParams& base)
 {
     ColorParams c = base;
-    const QList<int> styles = {0, 0, 0, 1, 1, 2, 3, 4, 4, 5};   // gradients and sine waves a little more often
+    const QList<int> styles = {0, 0, 0, 1, 1, 2, 3, 4, 4, 5, 6, 6};   // gradients and sine waves a little more often
+    c.trapShape = rnd.bounded(3);
+    c.trapX = chance(rnd, 0.5) ? 0.0 : uniform(rnd, -1.0, 1.0);
+    c.trapY = chance(rnd, 0.5) ? 0.0 : uniform(rnd, -1.0, 1.0);
+    c.trapSize = logUniform(rnd, 0.2, 2.0);
     c.style = styles[rnd.bounded(int(styles.size()))];
     c.palette = palettes()[rnd.bounded(int(palettes().size()))].name;
     c.colorScale = chance(rnd, 0.7) ? 0 : rnd.bounded(1, 3);

@@ -339,6 +339,9 @@ void GpuEngine::bindPassUniforms()
     }
     glUniform1i(loc("uStripe"), p.stripes ? 1 : 0);
     glUniform1f(loc("uStripeDensity"), float(p.stripeDensity));
+    glUniform1i(loc("uTrap"), p.trap);
+    glUniform2f(loc("uTrapC"), float(p.trapX), float(p.trapY));
+    glUniform1f(loc("uTrapR"), float(p.trapSize));
     // Shallow Mandelbrot views (power 2) skip the main cardioid and the period-2 disk: single precision tells them
     // apart from the edge only while a pixel is far larger than its rounding.
     const bool shallow = !p.julia && p.power == 2 && p.formula == 0 && !p.wideRange && p.shallowCheck

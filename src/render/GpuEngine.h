@@ -32,6 +32,8 @@ struct PassParams {
     int formula = 0;              // core::Formula
     bool stripes = false;
     double stripeDensity = 5;
+    int trap = -1;                // orbit trap shape (core::TrapShape), -1 off
+    double trapX = 0, trapY = 0, trapSize = 1;
     bool wideRange = false;       // the extended-range shader (deep zooms)
     bool useBla = true;
     bool boxing = true;           // fill blocks enclosed by inside pixels without iterating them

@@ -792,7 +792,8 @@ QWidget* MainWindow::buildColorCard()
     m_style->addItems(core::styleNames());
     m_style->setProperty("testId", QStringLiteral("style"));
     m_style->setToolTip(QStringLiteral("What the colors follow: the escape time (gradient, sine waves), the distance to the "
-                                       "set, stripes, the angle of escape, or the original Python renders' moiré fabric."));
+                                       "set, stripes, the angle of escape, how close the orbit comes to a shape (orbit "
+                                       "trap), or the original Python renders' moiré fabric."));
     grid->addWidget(m_style, r++, 1);
     m_paletteLabel = new QLabel(QStringLiteral("Palette"));
     grid->addWidget(m_paletteLabel, r, 0);
@@ -815,8 +816,22 @@ QWidget* MainWindow::buildColorCard()
     m_moireTint = new ColorButton(QStringLiteral("Fabric Tint"));
     m_moireTint->setProperty("testId", QStringLiteral("moireTint"));
     grid->addWidget(m_moireTint, r++, 1, Qt::AlignLeft);
+    m_trapShapeLabel = new QLabel(QStringLiteral("Trap Shape"));
+    grid->addWidget(m_trapShapeLabel, r, 0);
+    m_trapShape = new QComboBox;
+    m_trapShape->addItems(core::trapShapeNames());
+    m_trapShape->setProperty("testId", QStringLiteral("trapShape"));
+    m_trapShape->setToolTip(QStringLiteral("Colors each point by how close its orbit comes to this shape: a point gives "
+                                           "glowing eyes, a cross gives thin stalks, a circle gives rings. Changing it "
+                                           "renders the view again."));
+    grid->addWidget(m_trapShape, r++, 1);
     body->addLayout(grid);
     sliderGrid("COLOR", body);
+    connect(m_trapShape, &QComboBox::currentIndexChanged, this, [this](int i) {
+        if (m_syncing) return;
+        m_colors.trapShape = i;
+        colorsEdited();
+    });
 
     connect(m_look, &QComboBox::activated, this, [this](int i) {
         if (i < 0 || i >= core::looks().size()) return;
@@ -1132,6 +1147,7 @@ void MainWindow::syncControls()
     m_palette->setCurrentIndex(std::max(0, m_palette->findText(m_colors.palette)));
     m_scale->setCurrentIndex(m_colors.colorScale);
     m_moireTint->setColor(m_colors.moireTint);
+    m_trapShape->setCurrentIndex(m_colors.trapShape);
     m_edgeColor->setColor(m_colors.edgeColor);
     m_interior->setCurrentIndex(m_colors.interiorStyle);
     m_in1->setColor(m_colors.interiorColor);
@@ -1167,6 +1183,9 @@ void MainWindow::updateStyleVisibility()
     const bool moire = st == int(core::ColorStyle::Moire);
     m_moireTint->setVisible(moire);
     m_moireTintLabel->setVisible(moire);
+    const bool trap = st == int(core::ColorStyle::OrbitTrap);
+    m_trapShape->setVisible(trap);
+    m_trapShapeLabel->setVisible(trap);
     for (const core::SliderSpec& sp : core::sliderSpecs()) {
         SliderRow* r = m_rows.value(QString::fromLatin1(sp.key));
         if (!r || !sp.styles) continue;
@@ -1190,6 +1209,7 @@ void MainWindow::updateStyleVisibility()
     enable("bloom_threshold", m_colors.bloom > 0);
     enable("sphere_shade", m_colors.sphereSize > 0);
     enable("sphere_shine", m_colors.sphereSize > 0);
+    enable("trap_size", m_colors.trapShape == int(core::TrapShape::Circle));
     m_sphereBg->setEnabled(m_colors.sphereSize > 0);
 }
 
@@ -1259,6 +1279,7 @@ void MainWindow::resetCard(const QString& title)
             if (QLatin1String(sp.card) == title) m_colors.*(sp.member) = dc.*(sp.member);
         if (title == QLatin1String("COLOR")) {
             m_colors.style = dc.style;
+            m_colors.trapShape = dc.trapShape;
             m_colors.palette = dc.palette;
             m_colors.colorScale = dc.colorScale;
             m_colors.moireTint = dc.moireTint;

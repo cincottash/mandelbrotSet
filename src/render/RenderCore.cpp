@@ -26,7 +26,8 @@ bool samePassContent(const PassParams& a, const PassParams& b)
 {
     return sameView(a.view, b.view) && a.maxIterations == b.maxIterations && a.escapeRadius == b.escapeRadius
         && a.julia == b.julia && a.power == b.power && a.formula == b.formula && a.stripes == b.stripes
-        && a.stripeDensity == b.stripeDensity
+        && a.stripeDensity == b.stripeDensity && a.trap == b.trap && a.trapX == b.trapX && a.trapY == b.trapY
+        && a.trapSize == b.trapSize
         && a.wideRange == b.wideRange && a.useBla == b.useBla && a.boxing == b.boxing && a.shallowCheck == b.shallowCheck
         && a.offset.x == b.offset.x && a.offset.y == b.offset.y
         && a.offset.e == b.offset.e;
@@ -61,8 +62,13 @@ void RenderCore::setFractal(const core::FractalParams& f)
 
 void RenderCore::setColors(const core::ColorParams& c)
 {
+    // Stripes and orbit traps are gathered while iterating: changing them renders again.
+    auto trapKey = [](const core::ColorParams& p) {
+        return p.style == int(core::ColorStyle::OrbitTrap)
+            ? QStringLiteral("%1 %2 %3 %4").arg(p.trapShape).arg(p.trapX).arg(p.trapY).arg(p.trapSize) : QString();
+    };
     const bool stripes = (c.style == int(core::ColorStyle::Stripes)) != (m_colors.style == int(core::ColorStyle::Stripes))
-        || c.stripeDensity != m_colors.stripeDensity;
+        || c.stripeDensity != m_colors.stripeDensity || trapKey(c) != trapKey(m_colors);
     m_colors = c;
     m_colorsDirty = true;
     if (stripes) m_dirty = true;
@@ -251,6 +257,12 @@ PassParams RenderCore::passParams(const core::View& v, int outW, int outH, int s
     p.formula = int(m_fractal.formula);
     p.stripes = m_colors.style == int(core::ColorStyle::Stripes);
     p.stripeDensity = m_colors.stripeDensity;
+    if (m_colors.style == int(core::ColorStyle::OrbitTrap)) {
+        p.trap = m_colors.trapShape;
+        p.trapX = m_colors.trapX;
+        p.trapY = m_colors.trapY;
+        p.trapSize = m_colors.trapSize;
+    }
     if (m_ref.orbit) p.offset = v.centerOffsetFrom(m_ref.orbit->request.x, m_ref.orbit->request.y);
     p.wideRange = m_fractal.deepCapable() && v.scale.log2Abs() < kWideBelowLog2;
     p.useBla = m_useBla && m_ref.bla && m_ref.bla->valid() && m_fractal.deepCapable();
