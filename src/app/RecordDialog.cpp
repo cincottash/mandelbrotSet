@@ -1,6 +1,7 @@
 #include "RecordDialog.h"
 
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -102,6 +103,12 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     m_aa->setToolTip(QStringLiteral("Samples per pixel: smoother edges and less shimmer between frames, for 4, 9 or 16 "
                                     "times the work."));
     form->addRow(QStringLiteral("Anti-Aliasing"), m_aa);
+    m_fullQuality = new QCheckBox(QStringLiteral("Full Quality"));
+    m_fullQuality->setProperty("testId", QStringLiteral("fullQuality"));
+    m_fullQuality->setToolTip(QStringLiteral("Computes every frame on its own. Off, frames are taken from a sharper picture "
+                                             "made twice per halving of the view: several times faster, and only a little "
+                                             "softer in the finest detail."));
+    form->addRow(QString(), m_fullQuality);
     m_format = new QComboBox;
     m_format->setProperty("testId", QStringLiteral("format"));
     for (int i = 0; i < MovieWriter::formatNames().size(); ++i) {
@@ -145,6 +152,7 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     connect(m_seconds, &QDoubleSpinBox::valueChanged, this, &RecordDialog::updateInfo);
     connect(m_fps, &QComboBox::currentIndexChanged, this, &RecordDialog::updateInfo);
     connect(m_aa, &QComboBox::currentIndexChanged, this, &RecordDialog::updateInfo);
+    connect(m_fullQuality, &QCheckBox::toggled, this, &RecordDialog::updateInfo);
     connect(m_format, &QComboBox::currentIndexChanged, this, [this] {
         // GIF files grow very large: picking GIF moves a big size down to Medium (it can be raised again).
         if (MovieWriter::Format(m_format->currentIndex()) == MovieWriter::Format::Gif
@@ -206,6 +214,7 @@ void RecordDialog::updateInfo()
     parts << QStringLiteral("%1 frames").arg(QLocale().toString(s.frames()));
     if (doublings > 0)
         parts << QStringLiteral("the view halves %1 times a second").arg(QLocale().toString(doublings / s.seconds, 'f', 2));
+    if (!s.keyframes) parts << QStringLiteral("full quality takes several times longer");
     if (s.format == MovieWriter::Format::WebP && s.size.width() * s.size.height() > 1280 * 720)
         parts << QStringLiteral("animated WebP files grow large above 720p");
     if (s.format == MovieWriter::Format::Mp4 && (s.size.width() > 4096 || s.size.height() > 2304))
@@ -231,6 +240,7 @@ RecordSettings RecordDialog::settings() const
     s.fps = m_fps->currentText().toInt();
     s.size = QSize(m_w->value() & ~1, m_h->value() & ~1);
     s.samplesPerSide = m_aa->currentIndex() + 1;
+    s.keyframes = !m_fullQuality->isChecked();
     s.format = MovieWriter::Format(m_format->currentIndex());
     s.minibrot = m_minibrot;
     if (s.loop && m_minibrot.found) {
