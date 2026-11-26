@@ -7,6 +7,7 @@
 #include "core/ColorParams.h"
 #include "core/Fractal.h"
 #include "core/Location.h"
+#include "core/Palette.h"
 
 #include <QHash>
 #include <QList>
@@ -81,6 +82,13 @@ public:
     void resetCard(const QString& title);
     void randomizeEverything();
     void randomizeColors();
+    // Edit Palette, in steps (the dialog drives these; tests call them directly): the picture follows the palette
+    // being edited; finishing with save keeps it among the user's palettes, else everything goes back.
+    void beginPaletteEdit();
+    void previewPalette(const core::Palette& p);
+    void finishPaletteEdit(bool save, const core::Palette& p);
+    void deleteCustomPalette(const QString& name);
+    QStringList paletteChoices() const;   // the palette list's entries, in order
     bool placeButtonsEnabled(bool* go, bool* rename, bool* remove) const;
 
 protected:
@@ -135,6 +143,8 @@ private:
     void restoreSettings(const SettingsState& s);
     void updateAnimationButtons();
     void showViewMenu(const QPoint& global, const QString& re, const QString& im);
+    void editPalette();
+    void refreshPaletteList();
     void switchToJulia(const QString& re, const QString& im);
     void switchToMandelbrot();
     void switchFormula(core::Formula f);
@@ -182,6 +192,11 @@ private:
     QComboBox* m_look = nullptr;
     QComboBox* m_style = nullptr;
     QComboBox* m_palette = nullptr;
+    QToolButton* m_paletteEdit = nullptr;
+    // Edit Palette in progress: what to go back to on Cancel.
+    QList<core::Palette> m_palettesBeforeEdit;
+    core::ColorParams m_colorsBeforeEdit;
+    bool m_editingPalette = false;
     QComboBox* m_scale = nullptr;
     QLabel* m_paletteLabel = nullptr;
     QLabel* m_scaleLabel = nullptr;

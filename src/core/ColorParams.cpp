@@ -118,6 +118,8 @@ QJsonObject ColorParams::toJson() const
     QJsonObject o;
     o.insert(QStringLiteral("style"), style);
     o.insert(QStringLiteral("palette"), palette);
+    // A palette of the user's own travels with the colors, so a shared location file brings it along.
+    if (isCustomPalette(palette)) o.insert(QStringLiteral("palette_stops"), paletteByName(palette).stopsJson());
     o.insert(QStringLiteral("color_scale"), colorScale);
     o.insert(QStringLiteral("trap_shape"), trapShape);
     for (const SliderSpec& s : sliderSpecs()) o.insert(QLatin1String(s.key), this->*(s.member));
@@ -134,7 +136,14 @@ void ColorParams::fromJson(const QJsonObject& o)
 {
     const ColorParams d;
     style = std::clamp(o.value(QStringLiteral("style")).toInt(d.style), 0, int(styleNames().size()) - 1);
-    palette = paletteByName(o.value(QStringLiteral("palette")).toString(d.palette)).name;
+    const QString pname = o.value(QStringLiteral("palette")).toString(d.palette).trimmed();
+    if (!hasPalette(pname) && !pname.isEmpty()) {
+        Palette p;
+        p.name = pname.left(40);
+        p.stops = Palette::stopsFromJson(o.value(QStringLiteral("palette_stops")).toArray());
+        if (!p.stops.isEmpty()) putCustomPalette(p);
+    }
+    palette = paletteByName(pname).name;
     colorScale = std::clamp(o.value(QStringLiteral("color_scale")).toInt(d.colorScale), 0, 2);
     trapShape = std::clamp(o.value(QStringLiteral("trap_shape")).toInt(d.trapShape), 0, int(trapShapeNames().size()) - 1);
     for (const SliderSpec& s : sliderSpecs()) {

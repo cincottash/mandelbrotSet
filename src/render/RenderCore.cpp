@@ -364,9 +364,10 @@ bool RenderCore::step(double budgetMs, bool moving)
         return true;
     }
     m_waiting = false;
-    if (m_colors.palette != m_paletteName) {
+    if (m_colors.palette != m_paletteName || core::paletteRevision() != m_paletteRevision) {
         m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
         m_paletteName = m_colors.palette;
+        m_paletteRevision = core::paletteRevision();
         m_colorsDirty = true;
     }
 
@@ -481,6 +482,7 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
     v.fitPrecision();
     m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
     m_paletteName = m_colors.palette;
+    m_paletteRevision = core::paletteRevision();
     int maxIt = maxIterationsFor(v);
 
     // A reference that fits this view, computed here and now.

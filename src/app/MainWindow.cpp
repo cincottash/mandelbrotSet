@@ -10,6 +10,8 @@
 #include "core/Palette.h"
 #include "core/RandomScene.h"
 
+#include "PaletteEditor.h"
+
 #include <QPainter>
 #include <QSignalBlocker>
 
@@ -111,6 +113,17 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
     m_editBurst.setInterval(700);
     connect(&m_editBurst, &QTimer::timeout, this, [this] { m_lastState = currentSettings(); });
 
+    // The user's own palettes first, so the colors that use them find them.
+    {
+        QList<core::Palette> mine;
+        for (const QJsonValue& v : m_s.customPalettes) {
+            core::Palette p;
+            p.name = v.toObject().value(QStringLiteral("name")).toString().trimmed().left(40);
+            p.stops = core::Palette::stopsFromJson(v.toObject().value(QStringLiteral("stops")).toArray());
+            if (!p.name.isEmpty() && !p.stops.isEmpty()) mine.append(p);
+        }
+        core::setCustomPalettes(mine);
+    }
     // The last session comes back as it was left.
     core::View startView = core::View::home(false);
     if (!m_s.session.isEmpty()) {
@@ -319,9 +332,23 @@ void MainWindow::buildMenus()
         log(QStringLiteral("Formula, colors and view are back to their defaults. Undo and Back bring yours back."));
         saveSettingsSoon();
     });
-    connect(edit, &QMenu::aboutToShow, this, [this] {
+    edit->addSeparator();
+    edit->addAction(QStringLiteral("Edit Palette…"), this, &MainWindow::editPalette);
+    QAction* delPalette = edit->addAction(QStringLiteral("Delete This Palette"), this, [this] {
+        const QString name = m_colors.palette;
+        if (m_interactive
+            && QMessageBox::question(this, QStringLiteral("Delete Palette"),
+                                     QStringLiteral("Delete the palette \"%1\"? Pictures that use it change to the "
+                                                    "Seahorse palette.").arg(name))
+                   != QMessageBox::Yes)
+            return;
+        deleteCustomPalette(name);
+    });
+    delPalette->setToolTip(QStringLiteral("Only palettes of your own can be deleted."));
+    connect(edit, &QMenu::aboutToShow, this, [this, delPalette] {
         m_undoAct->setEnabled(!m_undo.isEmpty());
         m_redoAct->setEnabled(!m_redo.isEmpty());
+        delPalette->setEnabled(core::isCustomPalette(m_colors.palette));
     });
 
     m_viewMenu = bar->addMenu(QStringLiteral("&View"));
@@ -800,9 +827,17 @@ QWidget* MainWindow::buildColorCard()
     m_palette = new QComboBox;
     m_palette->setProperty("testId", QStringLiteral("palette"));
     m_palette->setIconSize(QSize(64, 14));
-    for (const QString& n : core::paletteNames()) m_palette->addItem(paletteIcon(n), n);
-    m_palette->setMaxVisibleItems(20);
-    grid->addWidget(m_palette, r++, 1);
+    m_palette->setMaxVisibleItems(24);
+    refreshPaletteList();
+    auto* palRow = new QHBoxLayout;
+    palRow->setSpacing(6);
+    palRow->addWidget(m_palette, 1);
+    m_paletteEdit = linkButton(QStringLiteral("Edit…"));
+    m_paletteEdit->setProperty("testId", QStringLiteral("editPalette"));
+    m_paletteEdit->setToolTip(QStringLiteral("Change this palette's colors, or start a palette of your own from it."));
+    connect(m_paletteEdit, &QToolButton::clicked, this, &MainWindow::editPalette);
+    palRow->addWidget(m_paletteEdit);
+    grid->addLayout(palRow, r++, 1);
     m_scaleLabel = new QLabel(QStringLiteral("Color Scale"));
     grid->addWidget(m_scaleLabel, r, 0);
     m_scale = new QComboBox;
@@ -1177,6 +1212,7 @@ void MainWindow::updateStyleVisibility()
     const bool usesPalette = st != int(core::ColorStyle::SineWaves) && st != int(core::ColorStyle::Moire);
     m_palette->setVisible(usesPalette);
     m_paletteLabel->setVisible(usesPalette);
+    m_paletteEdit->setVisible(usesPalette);
     const bool usesScale = st == int(core::ColorStyle::Gradient) || st == int(core::ColorStyle::SineWaves);
     m_scale->setVisible(usesScale);
     m_scaleLabel->setVisible(usesScale);
@@ -1438,6 +1474,10 @@ void MainWindow::saveSettingsNow()
     if (!m_interactive) return;
     m_s.geometry = saveGeometry();
     m_s.session = currentLocation().toJson(false);
+    QJsonArray mine;
+    for (const core::Palette& p : core::customPalettes())
+        mine.append(QJsonObject{{QStringLiteral("name"), p.name}, {QStringLiteral("stops"), p.stopsJson()}});
+    m_s.customPalettes = mine;
     m_s.save(appdata::settingsFile());
 }
 
@@ -1955,6 +1995,98 @@ void MainWindow::randomizeColors()
     setColors(c);
     finishEdit();
     log(QStringLiteral("New random colors: %1, %2 palette.").arg(core::styleNames().value(c.style), c.palette));
+}
+
+void MainWindow::refreshPaletteList()
+{
+    const bool was = m_syncing;
+    m_syncing = true;
+    m_palette->clear();
+    for (const core::Palette& p : core::builtInPalettes()) m_palette->addItem(paletteIcon(p.name), p.name);
+    if (!core::customPalettes().isEmpty()) {
+        m_palette->insertSeparator(m_palette->count());
+        for (const core::Palette& p : core::customPalettes()) m_palette->addItem(paletteIcon(p.name), p.name);
+    }
+    m_palette->setCurrentIndex(std::max(0, m_palette->findText(m_colors.palette)));
+    m_syncing = was;
+}
+
+QStringList MainWindow::paletteChoices() const
+{
+    QStringList out;
+    for (int i = 0; i < m_palette->count(); ++i)
+        if (!m_palette->itemText(i).isEmpty()) out << m_palette->itemText(i);
+    return out;
+}
+
+namespace {
+// The palette being edited goes by this name until it is saved (never shown: the list isn't refreshed meanwhile).
+const QString kPreviewPalette = QStringLiteral(" Palette Being Edited");
+}
+
+void MainWindow::beginPaletteEdit()
+{
+    finishEdit();
+    m_palettesBeforeEdit = core::customPalettes();
+    m_colorsBeforeEdit = m_colors;
+    m_editingPalette = true;
+}
+
+void MainWindow::previewPalette(const core::Palette& p)
+{
+    if (!m_editingPalette) return;
+    core::Palette preview = p;
+    preview.name = kPreviewPalette;
+    core::putCustomPalette(preview);
+    m_colors.palette = kPreviewPalette;
+    m_view->setColors(m_colors);
+}
+
+void MainWindow::finishPaletteEdit(bool save, const core::Palette& p)
+{
+    if (!m_editingPalette) return;
+    m_editingPalette = false;
+    core::setCustomPalettes(m_palettesBeforeEdit);
+    m_colors = m_colorsBeforeEdit;
+    if (save && !p.name.trimmed().isEmpty() && !core::isBuiltInPalette(p.name)) {
+        core::putCustomPalette(p);
+        refreshPaletteList();
+        m_colors.palette = core::paletteByName(p.name).name;
+        syncControls();
+        colorsEdited();
+        finishEdit();
+        saveSettingsSoon();
+        log(QStringLiteral("Saved the palette \"%1\" (%2 colors). It is listed after the built-in palettes.")
+                .arg(p.name).arg(p.stops.size()));
+        return;
+    }
+    refreshPaletteList();
+    m_view->setColors(m_colors);
+}
+
+void MainWindow::deleteCustomPalette(const QString& name)
+{
+    if (!core::isCustomPalette(name)) return;
+    const bool inUse = m_colors.palette.compare(name, Qt::CaseInsensitive) == 0;
+    core::removeCustomPalette(name);
+    if (inUse) {
+        m_colors.palette = core::ColorParams().palette;
+        colorsEdited();
+    }
+    refreshPaletteList();
+    syncControls();
+    saveSettingsSoon();
+    log(QStringLiteral("Deleted the palette \"%1\".").arg(name));
+}
+
+void MainWindow::editPalette()
+{
+    PaletteEditor d(core::paletteByName(m_colors.palette), this);
+    beginPaletteEdit();
+    connect(&d, &PaletteEditor::changed, this, &MainWindow::previewPalette);
+    previewPalette(d.result());
+    const bool ok = d.exec() == QDialog::Accepted;
+    finishPaletteEdit(ok, d.result());
 }
 
 void MainWindow::randomizeEverything()

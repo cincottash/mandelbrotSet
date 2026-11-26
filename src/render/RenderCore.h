@@ -126,6 +126,7 @@ private:
     bool m_dirty = true;            // the view or formula changed since the last pass started
     bool m_colorsDirty = true;
     QString m_paletteName;
+    int m_paletteRevision = -1;
 
     RefState m_ref;                 // uploaded to the graphics card
     long m_nextRefId = 1;
