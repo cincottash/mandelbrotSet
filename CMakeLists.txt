@@ -31,7 +31,7 @@ if(STATIC_BUILD AND MINGW)
     set(CMAKE_CXX_STANDARD_LIBRARIES "${CMAKE_CXX_STANDARD_LIBRARIES} -lbz2 -lbrotlidec -lbrotlicommon -lws2_32 -lcrypt32 -liphlpapi -lbcrypt")
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg OpenGL OpenGLWidgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg OpenGL OpenGLWidgets Concurrent)
 if(STATIC_BUILD AND MINGW AND TARGET harfbuzz::harfbuzz)
     # harfbuzz's CMake package always points at its DLL; use the static library instead.
     find_library(HARFBUZZ_STATIC NAMES libharfbuzz.a REQUIRED)
@@ -49,6 +49,14 @@ qt_standard_project_setup()
 find_path(MPFR_INCLUDE_DIR mpfr.h REQUIRED)
 find_library(MPFR_LIBRARY NAMES mpfr REQUIRED)
 find_library(GMP_LIBRARY NAMES gmp REQUIRED)
+# Animated WebP for zoom movies.
+find_library(WEBPMUX_LIBRARY NAMES webpmux REQUIRED)
+find_library(WEBP_LIBRARY NAMES webp REQUIRED)
+find_library(SHARPYUV_LIBRARY NAMES sharpyuv)
+set(WEBP_LIBRARIES ${WEBPMUX_LIBRARY} ${WEBP_LIBRARY})
+if(SHARPYUV_LIBRARY)
+    list(APPEND WEBP_LIBRARIES ${SHARPYUV_LIBRARY})
+endif()
 
 file(GLOB CORE_SOURCES CONFIGURE_DEPENDS src/core/*.cpp src/render/*.cpp)
 file(GLOB APP_SOURCES CONFIGURE_DEPENDS src/app/*.cpp)
@@ -75,7 +83,7 @@ endif()
 qt_add_executable(app WIN32 ${SOURCES})
 set_target_properties(app PROPERTIES OUTPUT_NAME ${APP_NAME})
 target_include_directories(app PRIVATE src)
-target_link_libraries(app PRIVATE engine Qt6::Widgets Qt6::Svg Qt6::OpenGLWidgets)
+target_link_libraries(app PRIVATE engine Qt6::Widgets Qt6::Svg Qt6::OpenGLWidgets Qt6::Concurrent ${WEBP_LIBRARIES})
 
 if(STATIC_BUILD)
     # Only the image plugins the app uses (SVG for icons and style-sheet images).
@@ -93,7 +101,8 @@ qt_add_resources(app resources PREFIX "/" BASE resources FILES
     resources/down_light.svg resources/down_dark.svg resources/up_light.svg resources/up_dark.svg)
 
 if(WIN32)
-    target_link_libraries(app PRIVATE user32 dwmapi)
+    # Media Foundation: Windows' own H.264 encoder for MP4 zoom movies.
+    target_link_libraries(app PRIVATE user32 dwmapi mfplat mfreadwrite mfuuid ole32)
     target_compile_definitions(app PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
     if(MINGW)
         # No compiler runtime DLLs next to the exe; strip debug symbols from release builds.

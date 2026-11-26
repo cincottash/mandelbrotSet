@@ -540,6 +540,37 @@ std::vector<float> GpuEngine::readRaw(const RawFrame& f, int which)
     return out;
 }
 
+std::vector<float> GpuEngine::readRawSmall(const RawFrame& f, int maxW, int* outW, int* outH)
+{
+    const int w = std::max(1, std::min(f.rawW, maxW));
+    const int h = std::max(1, int(std::lround(double(f.rawH) * w / std::max(f.rawW, 1))));
+    *outW = w;
+    *outH = h;
+    std::vector<float> out(size_t(w) * size_t(h) * 4);
+    unsigned fb[2], small = 0;
+    glGenFramebuffers(2, fb);
+    glGenTextures(1, &small);
+    glBindTexture(GL_TEXTURE_2D, small);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, w, h);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    GLint prevRead = 0, prevDraw = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb[0]);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, f.tex0, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb[1]);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, small, 0);
+    glBlitFramebuffer(0, 0, f.rawW, f.rawH, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb[1]);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_FLOAT, out.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(prevRead));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(prevDraw));
+    glDeleteFramebuffers(2, fb);
+    glDeleteTextures(1, &small);
+    return out;
+}
+
 QImage GpuEngine::readTarget(const ColorTarget& t)
 {
     if (!t.fbo) return {};

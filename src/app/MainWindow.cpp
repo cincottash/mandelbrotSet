@@ -6,7 +6,11 @@
 #include "Themes.h"
 #include "Widgets.h"
 
+#include "core/Minibrot.h"
 #include "core/Palette.h"
+
+#include <QPainter>
+#include <QSignalBlocker>
 
 #include <QAction>
 #include <QActionGroup>
@@ -133,6 +137,17 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
         log(QStringLiteral("The graphics card renderer couldn't start: %1").arg(why));
         updateStatus();
     });
+    connect(m_view, &FractalView::autopilotChanged, this, [this](bool on) {
+        m_autoBtn->setText(on ? QStringLiteral("■ Stop Autopilot") : QStringLiteral("Autopilot ▶"));
+        {
+            QSignalBlocker block(m_autoAct);
+            m_autoAct->setChecked(on);
+        }
+        log(on ? QStringLiteral("Autopilot on: zooming in, steering toward detail. Drag to steer, Escape to stop.")
+               : QStringLiteral("Autopilot off at zoom %1×.").arg(m_view->view().magnificationText()));
+        if (!on) rememberView();
+        if (!m_statusTimer.isActive()) m_statusTimer.start();
+    });
     connect(m_view, &FractalView::zoomLimitReached, this, [this](const QString& why) {
         static QString last;
         if (why != last) log(why);
@@ -237,6 +252,25 @@ void MainWindow::buildMenus()
     explore->addSeparator();
     explore->addAction(QStringLiteral("Add to Places…"), QKeySequence(QStringLiteral("Ctrl+D")), this, &MainWindow::addPlace);
     explore->addAction(QStringLiteral("Randomize Colors"), QKeySequence(QStringLiteral("Ctrl+R")), this, &MainWindow::randomizeColors);
+    explore->addSeparator();
+    m_autoAct = explore->addAction(QStringLiteral("Autopilot"));
+    m_autoAct->setShortcut(QKeySequence(Qt::Key_P));
+    m_autoAct->setCheckable(true);
+    m_autoAct->setToolTip(QStringLiteral("Zooms in on its own, forever, steering toward the richest detail."));
+    connect(m_autoAct, &QAction::triggered, this, [this](bool on) { setAutopilot(on); });
+    QMenu* apSpeed = explore->addMenu(QStringLiteral("Autopilot Speed"));
+    auto* apGroup = new QActionGroup(this);
+    const QList<QPair<QString, double>> apSpeeds = {{QStringLiteral("Slow"), 1.25}, {QStringLiteral("Normal"), 2.0},
+                                                    {QStringLiteral("Fast"), 4.0}, {QStringLiteral("Very Fast"), 8.0}};
+    for (const auto& [name, f] : apSpeeds) {
+        QAction* a = apSpeed->addAction(name);
+        a->setCheckable(true);
+        a->setChecked(f == 2.0);
+        a->setToolTip(QStringLiteral("Zooms %1 times in every second.").arg(f));
+        apGroup->addAction(a);
+        connect(a, &QAction::triggered, this, [this, f = f] { m_view->setAutopilotSpeed(f); });
+    }
+    explore->addAction(QStringLiteral("Record Zoom…"), QKeySequence(QStringLiteral("Ctrl+M")), this, &MainWindow::recordZoom);
     connect(explore, &QMenu::aboutToShow, this, [this] {
         m_backAct->setEnabled(m_historyPos > 0);
         m_forwardAct->setEnabled(m_historyPos >= 0 && m_historyPos < int(m_history.size()) - 1);
@@ -905,15 +939,27 @@ void MainWindow::buildUi()
     m_forwardBtn->setProperty("testId", QStringLiteral("forward"));
     m_forwardBtn->setToolTip(QStringLiteral("The next view again, after going back (Alt+Right)."));
     auto* reset = new QPushButton(QStringLiteral("Reset View"));
-    reset->setObjectName(QStringLiteral("primary"));
     reset->setProperty("testId", QStringLiteral("resetView"));
     reset->setToolTip(QStringLiteral("Zoom all the way out (Home)."));
+    auto* record = new QPushButton(QStringLiteral("Record Zoom…"));
+    record->setProperty("testId", QStringLiteral("recordZoom"));
+    record->setToolTip(QStringLiteral("Makes a movie of a zoom into this view, or a seamless loop (Ctrl+M)."));
+    m_autoBtn = new QPushButton(QStringLiteral("Autopilot ▶"));
+    m_autoBtn->setObjectName(QStringLiteral("primary"));
+    m_autoBtn->setProperty("testId", QStringLiteral("autopilot"));
+    m_autoBtn->setToolTip(QStringLiteral("Zooms in on its own, forever, steering toward the richest detail (P). "
+                                         "Drag to steer it; Escape stops it."));
     connect(m_backBtn, &QPushButton::clicked, this, &MainWindow::back);
     connect(m_forwardBtn, &QPushButton::clicked, this, &MainWindow::forward);
     connect(reset, &QPushButton::clicked, this, &MainWindow::resetView);
+    connect(record, &QPushButton::clicked, this, &MainWindow::recordZoom);
+    connect(m_autoBtn, &QPushButton::clicked, this, [this] { setAutopilot(!m_view->autopilot()); });
     bb->addWidget(m_backBtn);
     bb->addWidget(m_forwardBtn);
     bb->addWidget(reset);
+    bb->addSpacing(12);
+    bb->addWidget(record);
+    bb->addWidget(m_autoBtn);
     outer->addWidget(bottom);
     setCentralWidget(root);
 }
@@ -1430,6 +1476,191 @@ bool MainWindow::savePictureTo(const QString& f, int w, int h, int ss, QString* 
     m_s.lastFolder = QFileInfo(f).absolutePath();
     log(QStringLiteral("Saved %1 (%2 × %3, %4 s).").arg(QDir::toNativeSeparators(f)).arg(w).arg(h)
             .arg(QLocale().toString(t.elapsed() / 1000.0, 'f', 1)));
+    return true;
+}
+
+void MainWindow::setAutopilot(bool on)
+{
+    m_view->setAutopilot(on);
+    if (on && !m_view->autopilot() && !m_view->gpuReady()) log(QStringLiteral("The autopilot needs the graphics card renderer."));
+}
+
+void MainWindow::recordZoom()
+{
+    setAutopilot(false);
+    const bool canLoop = !m_fractal.julia() && m_fractal.power == 2;
+    const QString why = m_fractal.julia()
+        ? QStringLiteral("Loops need the Mandelbrot set: Julia sets have no mini copies of themselves.")
+        : QStringLiteral("Loops need power 2: the deep zoom into a mini copy only works there.");
+    RecordDialog d(m_view->view(), canLoop, why, m_view->size() * m_view->devicePixelRatioF(), this);
+    if (d.exec() != QDialog::Accepted) return;
+    RecordSettings s = d.settings();
+    if (!s.loop) s.from = core::View::home(m_fractal.julia());
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    QString path;
+    if (s.format == MovieWriter::Format::PngFrames) {
+        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose a Folder for the Frames"), m_s.lastFolder,
+                                                              filedialogs::options());
+        if (dir.isEmpty()) return;
+        path = QDir(dir).filePath(QStringLiteral("zoom-%1").arg(stamp));
+        m_s.lastFolder = dir;
+    } else {
+        const QString ext = MovieWriter::extension(s.format);
+        const QString filter = s.format == MovieWriter::Format::Mp4 ? QStringLiteral("MP4 Videos (*.mp4)")
+                                                                     : QStringLiteral("Animated WebP (*.webp)");
+        path = QFileDialog::getSaveFileName(this, QStringLiteral("Save Zoom Movie"),
+                                            QDir(m_s.lastFolder).filePath(QStringLiteral("zoom-%1%2").arg(stamp, ext)), filter,
+                                            nullptr, filedialogs::options());
+        if (path.isEmpty()) return;
+        if (!path.endsWith(ext, Qt::CaseInsensitive)) path += ext;
+        m_s.lastFolder = QFileInfo(path).absolutePath();
+    }
+    QProgressDialog progress(QStringLiteral("Rendering the zoom…"), QStringLiteral("Cancel"), 0, 1000, this);
+    progress.setWindowTitle(QStringLiteral("Record Zoom"));
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    QElapsedTimer t;
+    t.start();
+    QString err;
+    const bool ok = recordZoomTo(s, path, &err, [&](int done, int total) {
+        progress.setValue(int(1000.0 * done / std::max(total, 1)));
+        if (done > 0) {
+            const double left = t.elapsed() / 1000.0 * (total - done) / done;
+            progress.setLabelText(QStringLiteral("Frame %1 of %2 · about %3 left")
+                                      .arg(QLocale().toString(done)).arg(QLocale().toString(total))
+                                      .arg(left < 90 ? QStringLiteral("%1 s").arg(int(std::ceil(left)))
+                                                     : QStringLiteral("%1 min").arg(int(std::ceil(left / 60)))));
+        }
+        QApplication::processEvents();
+        return !progress.wasCanceled();
+    });
+    progress.close();
+    if (!ok && err != QStringLiteral("Cancelled."))
+        QMessageBox::warning(this, QStringLiteral("Couldn't Record the Zoom"), err);
+}
+
+bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QString* error,
+                              const std::function<bool(int, int)>& progress)
+{
+    QString err;
+    if (s.loop && !s.minibrot.found) {
+        err = QStringLiteral("No mini Mandelbrot was found for the loop.");
+        if (error) *error = err;
+        return false;
+    }
+    std::unique_ptr<MovieWriter> writer = MovieWriter::create(s.format, path, s.size.width(), s.size.height(), s.fps, &err);
+    if (!writer) {
+        log(QStringLiteral("The movie couldn't start: %1").arg(err));
+        if (error) *error = err;
+        return false;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    const int n = s.frames();
+    // A loop renders a few frames past its end and blends them into its first ones, so the wrap can't be seen.
+    const int k = s.loop ? std::clamp(int(std::lround(s.crossfadeSeconds * s.fps)), 1, std::max(1, n / 3)) : 0;
+    const int total = n + k;
+    auto viewAt = [&](int i) {
+        const double tt = s.loop ? double(i) / n : (n > 1 ? double(i) / (n - 1) : 1.0);
+        return core::zoomPathAt(s.from, s.to, tt);
+    };
+    const core::View deepest = viewAt(n - 1 + k);
+    if (!m_view->beginMovie(deepest, s.size.width(), s.size.height())) {
+        m_view->endMovie();
+        err = m_view->gpuReady() ? QStringLiteral("The reference orbit couldn't be computed.") : m_view->gpuError();
+        if (error) *error = err;
+        return false;
+    }
+    // A loop's colors: near a minibrot of period p the escape times run about p times higher (plus an offset), so
+    // iteration-based colors would come out different at the end. Measure the offset on two small probes, and move
+    // the color density and offset gradually so the last frame's colors land on the first frame's.
+    double loopP = 1, loopB = 0;
+    const bool usesMu = m_colors.style == int(core::ColorStyle::Gradient) || m_colors.style == int(core::ColorStyle::SineWaves);
+    if (s.loop && usesMu) {
+        loopP = s.minibrot.period;
+        const int pw = 160, ph = std::max(16, 160 * s.size.height() / std::max(1, s.size.width()));
+        const std::vector<float> a = m_view->probeEscapeTimes(s.from, pw, ph), b = m_view->probeEscapeTimes(s.to, pw, ph);
+        std::vector<double> diffs;
+        for (size_t i = 0; i < std::min(a.size(), b.size()); ++i)
+            if (a[i] >= 0 && b[i] >= 0) diffs.push_back(double(b[i]) - loopP * double(a[i]));
+        if (!diffs.empty()) {
+            std::nth_element(diffs.begin(), diffs.begin() + ptrdiff_t(diffs.size() / 2), diffs.end());
+            loopB = diffs[diffs.size() / 2];
+        }
+    }
+    auto colorsAt = [&](double tt) {
+        core::ColorParams c = m_colors;
+        if (!s.loop || !usesMu || loopP <= 1) return c;
+        if (c.colorScale == 0) {           // linear: mu * D / 24 + O
+            c.density = m_colors.density * std::pow(loopP, -tt);
+            c.offset = m_colors.offset - tt * loopB * m_colors.density / (24.0 * loopP);
+        } else if (c.colorScale == 1) {    // square root
+            c.density = m_colors.density * std::pow(loopP, -0.5 * tt);
+        } else {                           // logarithmic: a shift
+            c.offset = m_colors.offset - tt * 0.5 * m_colors.density * std::log2(loopP);
+        }
+        c.offset -= std::floor(c.offset);
+        return c;
+    };
+    int done = 0;
+    bool cancelled = false;
+    auto frame = [&](int i, QImage* out) {
+        QString e;
+        m_view->setColors(colorsAt(s.loop ? double(i) / n : 0.0));
+        *out = m_view->renderPicture(viewAt(i), s.size.width(), s.size.height(), s.samplesPerSide, &e,
+                                     [&](double) { return !progress || progress(done, total); }, double(i) / s.fps);
+        if (out->isNull()) {
+            if (e == QStringLiteral("Cancelled.")) cancelled = true;
+            err = e;
+            return false;
+        }
+        ++done;
+        if (progress && !progress(done, total)) {
+            cancelled = true;
+            return false;
+        }
+        return true;
+    };
+    bool ok = true;
+    QList<QImage> tail;
+    for (int i = 0; i < k && ok; ++i) {
+        QImage img;
+        ok = frame(n + i, &img);
+        tail << img;
+    }
+    for (int i = 0; i < n && ok; ++i) {
+        QImage img;
+        ok = frame(i, &img);
+        if (!ok) break;
+        if (i < k) {
+            // Fade from the copy one loop deeper into the start.
+            QImage mixed = tail[i].convertToFormat(QImage::Format_RGB32);
+            QPainter p(&mixed);
+            p.setOpacity(double(i) / k);
+            p.drawImage(0, 0, img);
+            p.end();
+            img = mixed;
+        }
+        ok = writer->add(img, &err);
+    }
+    m_view->setColors(m_colors);
+    m_view->endMovie();
+    if (ok) ok = writer->finish(&err);
+    writer.reset();
+    if (!ok) {
+        if (cancelled) err = QStringLiteral("Cancelled.");
+        log(cancelled ? QStringLiteral("The zoom movie was cancelled.") : QStringLiteral("The zoom movie failed: %1").arg(err));
+        // A half-written file is no use: remove it (a frames folder keeps the frames already written).
+        if (s.format != MovieWriter::Format::PngFrames) QFile::remove(path);
+        if (error) *error = err;
+        return false;
+    }
+    log(QStringLiteral("Saved a %1-frame %2 to %3 (%4 × %5, %6 s to render).")
+            .arg(QLocale().toString(n))
+            .arg(s.loop ? QStringLiteral("seamless loop") : QStringLiteral("zoom"))
+            .arg(QDir::toNativeSeparators(path))
+            .arg(s.size.width()).arg(s.size.height())
+            .arg(QLocale().toString(timer.elapsed() / 1000.0, 'f', 1)));
     return true;
 }
 

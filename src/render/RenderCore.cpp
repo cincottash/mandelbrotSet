@@ -255,6 +255,26 @@ PassParams RenderCore::passParams(const core::View& v, int outW, int outH, int s
     return p;
 }
 
+bool RenderCore::needsMoreIterations(const PassStats& s, int maxIt, quint64 pixels)
+{
+    // "Many" = over 1 % of the escaping pixels escape in the limit's top half (a zoomed-out view has a thin
+    // boundary of slow pixels that never needs more).
+    return s.escaped > 0 && double(s.nearMax) > 0.01 * double(s.escaped) && double(s.nearMax) > 0.0005 * double(pixels)
+        && maxIt < core::FractalParams::kMaxIterations;
+}
+
+bool RenderCore::prepareReference(const core::View& deepest, int w, int h)
+{
+    if (!m_gpu.ready()) return false;
+    core::View v = deepest;
+    v.fitPrecision();
+    stopWorker();
+    requestReference(v, maxIterationsFor(v), w, h, false);
+    if (m_thread.joinable()) m_thread.join();
+    m_jobDone = true;
+    return collectWorker();
+}
+
 void RenderCore::afterFullPass(const RawFrame& f)
 {
     const PassStats& s = f.stats;
@@ -267,10 +287,7 @@ void RenderCore::afterFullPass(const RawFrame& f)
     const int maxIt = f.maxIterations;
     if (m_fractal.autoIterations) {
         // Many pixels escaping late: the limit cuts off detail, so raise it and render again.
-        // "Many" = over 1 % of the escaping pixels escape in the limit's top half (a zoomed-out view has a thin
-        // boundary of slow pixels that never needs more).
-        if (s.escaped > 0 && double(s.nearMax) > 0.01 * double(s.escaped)
-            && double(s.nearMax) > 0.0005 * double(pixels) && maxIt < core::FractalParams::kMaxIterations) {
+        if (needsMoreIterations(s, maxIt, pixels)) {
             m_autoIter = std::min(maxIt * 2, core::FractalParams::kMaxIterations);
             m_autoIterScaleLog2 = f.view.scale.log2Abs();
             m_dirty = true;
@@ -430,7 +447,7 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
     v.fitPrecision();
     m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
     m_paletteName = m_colors.palette;
-    const int maxIt = maxIterationsFor(v);
+    int maxIt = maxIterationsFor(v);
 
     // A reference that fits this view, computed here and now.
     capturedReferences = 0;
@@ -442,11 +459,38 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
         m_jobDone = true;
         return collectWorker();
     };
-    bool tableOnly = false;
-    if (referenceWanted(v, maxIt, w, h, &tableOnly) || !referenceUsable(v, maxIt)) {
-        if (!syncReference(nullptr, nullptr, tableOnly && referenceUsable(v, maxIt))) {
-            if (error) *error = QStringLiteral("The reference orbit couldn't be computed.");
-            return {};
+    auto ensureReference = [&]() {
+        bool tableOnly = false;
+        const bool usable = referenceUsable(v, maxIt);
+        if (!usable || referenceWanted(v, maxIt, w, h, &tableOnly)) return syncReference(nullptr, nullptr, tableOnly && usable);
+        return true;
+    };
+    if (!ensureReference()) {
+        if (error) *error = QStringLiteral("The reference orbit couldn't be computed.");
+        return {};
+    }
+    RawFrame frame;
+
+    // With Auto iterations, a small whole-view probe first settles the limit, so every piece uses the same one.
+    if (m_fractal.autoIterations) {
+        const int pw = std::max(16, std::min(w, 320)), ph = std::max(16, int(std::lround(double(h) * pw / w)));
+        for (int raise = 0; raise < 6; ++raise) {
+            m_gpu.startPass(frame, passParams(v, pw, ph, 1, maxIt));
+            while (!m_gpu.continuePass(frame, 150.0)) {
+                if (progress && !progress(0.0)) {
+                    m_gpu.freeFrame(frame);
+                    if (error) *error = QStringLiteral("Cancelled.");
+                    return {};
+                }
+            }
+            if (!needsMoreIterations(frame.stats, maxIt, quint64(pw) * quint64(ph))) break;
+            maxIt = std::min(maxIt * 2, core::FractalParams::kMaxIterations);
+            m_autoIter = maxIt;
+            m_autoIterScaleLog2 = v.scale.log2Abs();
+            if (!ensureReference()) {
+                if (error) *error = QStringLiteral("The reference orbit couldn't be computed.");
+                return {};
+            }
         }
     }
 
@@ -456,7 +500,6 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
     QImage out(w, h, QImage::Format_RGB32);
     out.fill(Qt::black);
     QPainter painter(&out);
-    RawFrame frame;
     ColorTarget target;
     const long long totalPixels = qint64(w) * h;
     long long donePixels = 0;

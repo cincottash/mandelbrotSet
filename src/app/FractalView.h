@@ -45,6 +45,14 @@ public:
     double framesPerSecond() const { return m_fps; }
     bool busy() const { return m_busy; }
 
+    // Autopilot: zooms in on its own, forever, steering toward the richest detail near the middle.
+    void setAutopilot(bool on);
+    bool autopilot() const { return m_autopilot; }
+    void setAutopilotSpeed(double factorPerSecond) { m_autoRate = std::log(std::clamp(factorPerSecond, 1.01, 16.0)); }
+    double autopilotSpeed() const { return std::exp(m_autoRate); }
+    // Testing: run the autopilot for a stretch of simulated time, a frame at a time.
+    void autopilotSteps(int frames, double secondsPerFrame);
+
     // Smooth moves (as the keys and buttons do).
     void zoomAnimated(double factor, double u = 0, double v = 0);
     void panAnimated(double du, double dv);
@@ -53,7 +61,13 @@ public:
 
     // A full picture of any view and size (blocks; drawn in pieces when large). Null on cancel or error.
     QImage renderPicture(const core::View& v, int w, int h, int samplesPerSide, QString* error,
-                         const std::function<bool(double)>& progress = {});
+                         const std::function<bool(double)>& progress = {}, double timeSeconds = -1);
+    // A movie holds the engine from its first frame to its last (the picture on screen waits meanwhile), with
+    // the reference orbit computed once for its deepest frame.
+    bool beginMovie(const core::View& deepest, int w, int h);
+    void endMovie();
+    // The escape times (mu, -1 inside) of a small render of a view, for matching a loop's colors.
+    std::vector<float> probeEscapeTimes(const core::View& v, int w, int h);
     // The newest colors as a picture (for place thumbnails).
     QImage currentPicture();
     // A small picture of any place, on the preview's renderer (the main view's reference orbit stays).
@@ -73,6 +87,7 @@ signals:
     void contextMenuRequested(const QPoint& global, const QString& re, const QString& im);
     void gpuUnavailable(const QString& reason);
     void zoomLimitReached(const QString& why);
+    void autopilotChanged(bool on);
 
 protected:
     void initializeGL() override;
@@ -93,6 +108,8 @@ private:
     void applyZoom(double u, double v, double factor);
     void updatePreview();
     void placePreview();
+    void autopilotAdvance(double dt, qint64 now);
+    bool pickAutopilotTarget(QPointF* target);   // in view units of the current view; needs the context current
 
     render::GpuEngine m_gpu;
     std::unique_ptr<render::RenderCore> m_core;
@@ -100,6 +117,7 @@ private:
     std::unique_ptr<render::RenderCore> m_previewCore;
     bool m_ok = false, m_tried = false;
     bool m_exporting = false;
+    bool m_inMovie = false;
     QString m_error;
 
     core::View m_view;
@@ -127,6 +145,15 @@ private:
     qint64 m_fpsWindowStart = 0;
     bool m_busy = false;
     QTimer m_settle;
+
+    // Autopilot
+    bool m_autopilot = false;
+    double m_autoRate = 0.6931;   // log of the zoom per second (2x)
+    QPointF m_autoTarget;         // where it steers, in current view units
+    bool m_autoHasTarget = false;
+    qint64 m_autoNextLookNs = 0;
+    qint64 m_userSteersUntilNs = 0;
+    double m_autoBackOut = 0;     // seconds left of zooming out after the view went empty
 
     // Julia preview
     bool m_juliaPreview = false;

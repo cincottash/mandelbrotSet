@@ -58,12 +58,18 @@ public:
     bool step(double budgetMs, bool moving);
     // The newest finished colors (follow the current view with GpuEngine::display()).
     const ColorTarget& picture() const { return m_picture; }
+    // The newest finished raw frame (for the autopilot's look at the picture), or null.
+    const RawFrame* frontFrame() const { return (m_front >= 0 && m_frames[m_front].complete) ? &m_frames[m_front] : nullptr; }
     CoreStatus status() const;
 
     // Renders a whole picture now (exports, tests): blocks, computing the reference on this thread if needed.
     // `progress` gets 0..1 and returns false to cancel. A null image on cancel or error.
     QImage renderImage(const core::View& v, int w, int h, int ss, QString* error,
                        const std::function<bool(double)>& progress = {});
+
+    // Computes a reference orbit for the deepest view of a movie now, so every frame of a zoom toward it reuses it.
+    bool prepareReference(const core::View& deepest, int w, int h);
+    static bool needsMoreIterations(const PassStats& s, int maxIt, quint64 pixels);
 
     // The deepest the current formula can zoom (power 2: practically unlimited).
     core::FloatExp minimumScale() const;

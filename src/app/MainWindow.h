@@ -1,6 +1,7 @@
 // The main window: option cards on the left, the picture on the right, menus, a header and a bottom bar.
 #pragma once
 
+#include "RecordDialog.h"
 #include "Settings.h"
 
 #include "core/ColorParams.h"
@@ -65,6 +66,11 @@ public:
     void addPlaceNamed(const QString& name);
     void renamePlaceTo(int row, const QString& name);
     void selectPlace(int row);
+    // Record Zoom once its dialog is answered: renders every frame and writes the movie. `progress` gets the frames
+    // done and the total, and returns false to cancel.
+    bool recordZoomTo(const RecordSettings& s, const QString& path, QString* error,
+                      const std::function<bool(int, int)>& progress = {});
+    void setAutopilot(bool on);
     bool placeButtonsEnabled(bool* go, bool* rename, bool* remove) const;
 
 protected:
@@ -101,6 +107,7 @@ private:
     void saveSettingsNow();
 
     void savePicture();
+    void recordZoom();
     void saveLocation();
     void openLocation();
     void copyLocation();
@@ -177,6 +184,8 @@ private:
     // Bottom bar
     QPushButton* m_backBtn = nullptr;
     QPushButton* m_forwardBtn = nullptr;
+    QPushButton* m_autoBtn = nullptr;
+    QAction* m_autoAct = nullptr;
 
     // Menus
     QMenu* m_viewMenu = nullptr;

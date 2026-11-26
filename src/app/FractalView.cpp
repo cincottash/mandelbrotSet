@@ -261,9 +261,11 @@ void FractalView::paintGL()
         return;
     }
     advance(dt);
+    autopilotAdvance(dt, now);
     const qreal dpr = devicePixelRatioF();
     const int W = std::max(1, int(std::lround(width() * dpr))), H = std::max(1, int(std::lround(height() * dpr)));
-    const bool animating = std::fabs(m_zoomPending) > 1e-4 || m_panPending != QPointF() || std::fabs(m_rotatePending) > 1e-5;
+    const bool animating = m_autopilot || std::fabs(m_zoomPending) > 1e-4 || m_panPending != QPointF()
+        || std::fabs(m_rotatePending) > 1e-5;
     const bool moving = m_dragging || m_rotating || animating || (now - m_lastChangeNs) < 150'000'000;
     m_core->setView(m_view);
     m_core->setOutputSize(W, H);
@@ -301,8 +303,48 @@ bool FractalView::renderUntilIdle(int timeoutMs)
     return !more;
 }
 
+bool FractalView::beginMovie(const core::View& deepest, int w, int h)
+{
+    if (!m_tried) grabFramebuffer();
+    if (!m_ok) return false;
+    setAutopilot(false);
+    m_inMovie = true;
+    m_exporting = true;
+    makeCurrent();
+    const bool ok = m_core->prepareReference(deepest, w, h);
+    doneCurrent();
+    return ok;
+}
+
+std::vector<float> FractalView::probeEscapeTimes(const core::View& v, int w, int h)
+{
+    if (!m_ok) return {};
+    makeCurrent();
+    m_core->captureRaw = true;
+    QString err;
+    const QImage img = m_core->renderImage(v, w, h, 1, &err);
+    m_core->captureRaw = false;
+    std::vector<float> mu;
+    if (!img.isNull()) {
+        mu.resize(size_t(w) * h);
+        for (size_t i = 0; i < mu.size(); ++i) mu[i] = m_core->capturedRaw0[i * 4];
+    }
+    m_core->capturedRaw0.clear();
+    m_core->capturedRaw1.clear();
+    doneCurrent();
+    return mu;
+}
+
+void FractalView::endMovie()
+{
+    m_inMovie = false;
+    m_exporting = false;
+    if (m_core) m_core->setTime(m_clock.nsecsElapsed() / 1e9);
+    update();
+}
+
 QImage FractalView::renderPicture(const core::View& v, int w, int h, int ss, QString* error,
-                                  const std::function<bool(double)>& progress)
+                                  const std::function<bool(double)>& progress, double timeSeconds)
 {
     if (!m_tried) grabFramebuffer();
     if (!m_ok) {
@@ -313,14 +355,17 @@ QImage FractalView::renderPicture(const core::View& v, int w, int h, int ss, QSt
     // engine), and the context is made current again after each update, since painting other windows switches it.
     m_exporting = true;
     makeCurrent();
+    if (timeSeconds >= 0) m_core->setTime(timeSeconds);
     const QImage img = m_core->renderImage(v, w, h, ss, error, [&](double p) {
         const bool goOn = !progress || progress(p);
         makeCurrent();
         return goOn;
     });
     doneCurrent();
-    m_exporting = false;
-    update();
+    if (!m_inMovie) {
+        m_exporting = false;
+        update();
+    }
     return img;
 }
 
@@ -350,6 +395,7 @@ void FractalView::mousePressEvent(QMouseEvent* e)
     setFocus();
     m_lastMouse = e->position();
     m_pressPos = e->position();
+    m_userSteersUntilNs = m_clock.nsecsElapsed() + 2'500'000'000LL;   // the autopilot lets the hand steer a while
     if (e->button() == Qt::LeftButton) {
         if (m_pickMode) {
             QString re, im;
@@ -458,6 +504,7 @@ void FractalView::keyPressEvent(QKeyEvent* e)
     case Qt::Key_PageDown: rotateBy(-15); break;
     case Qt::Key_Escape:
         if (m_pickMode) setPickMode(false);
+        if (m_autopilot) setAutopilot(false);
         stopMotion();
         break;
     default: QOpenGLWidget::keyPressEvent(e); return;
@@ -470,6 +517,139 @@ void FractalView::leaveEvent(QEvent* e)
     m_previewWanted = false;
     m_preview->hide();
     QOpenGLWidget::leaveEvent(e);
+}
+
+// ---------------------------------------------------------------- autopilot
+
+void FractalView::setAutopilot(bool on)
+{
+    if (on == m_autopilot || (on && !m_ok)) return;
+    m_autopilot = on;
+    m_autoHasTarget = false;
+    m_autoNextLookNs = 0;
+    m_autoBackOut = 0;
+    stopMotion();
+    emit autopilotChanged(on);
+    markChanged();
+}
+
+bool FractalView::pickAutopilotTarget(QPointF* target)
+{
+    const render::RawFrame* f = m_core->frontFrame();
+    if (!f) return false;
+    int W = 0, H = 0;
+    const std::vector<float> raw = m_gpu.readRawSmall(*f, 240, &W, &H);
+    if (W < 8 || H < 8) return false;
+    auto mu = [&](int x, int y) { return raw[(size_t(y) * W + x) * 4]; };
+    // Score patches by how much edge they hold: neighbors where inside meets outside, or the escape time jumps.
+    // Solid inside and smooth outside score nothing, so the autopilot never settles into an empty patch.
+    const int cols = 12, rows = std::max(4, int(std::lround(12.0 * H / W)));
+    const double hh = H / 2.0;
+    // The previous target, in this frame's view units (for a little loyalty, so the path doesn't jitter).
+    double best = 0;
+    QPointF bestQ;
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            const int x0 = c * W / cols, x1 = (c + 1) * W / cols, y0 = r * H / rows, y1 = (r + 1) * H / rows;
+            int pairs = 0, edges = 0, inside = 0, count = 0;
+            for (int y = y0; y < y1 - 1; ++y)
+                for (int x = x0; x < x1 - 1; ++x) {
+                    const float a = mu(x, y), b = mu(x + 1, y), d = mu(x, y + 1);
+                    ++count;
+                    if (a < 0) ++inside;
+                    for (float n : {b, d}) {
+                        ++pairs;
+                        if ((a < 0) != (n < 0) || (a >= 0 && std::fabs(a - n) > 0.6f)) ++edges;
+                    }
+                }
+            if (pairs == 0) continue;
+            const double edgeFrac = double(edges) / pairs, insideFrac = double(inside) / std::max(count, 1);
+            if (edgeFrac < 0.03 || insideFrac > 0.97) continue;
+            const QPointF q(((x0 + x1) / 2.0 - W / 2.0) / hh, -((y0 + y1) / 2.0 - hh) / hh);
+            const double weight = std::exp(-(q.x() * q.x() + q.y() * q.y()) / (2 * 0.45 * 0.45));
+            const double score = std::min(edgeFrac, 0.6) * weight;
+            if (score > best) {
+                best = score;
+                bestQ = q;
+            }
+        }
+    }
+    if (best <= 0.004) return false;
+    // From the frame's view to the current one (the picture may lag a little behind the view).
+    const core::ComplexExp d = f->view.centerOffsetFrom(m_view.cx, m_view.cy) + f->view.offsetOf(bestQ.x(), bestQ.y());
+    const std::complex<double> rel = (d * (core::FloatExp(1.0) / m_view.scale)).toComplex();
+    const double ca = std::cos(-m_view.angle), sa = std::sin(-m_view.angle);
+    const QPointF t(rel.real() * ca - rel.imag() * sa, rel.real() * sa + rel.imag() * ca);
+    if (!std::isfinite(t.x()) || !std::isfinite(t.y())) return false;
+    *target = t;
+    return true;
+}
+
+void FractalView::autopilotAdvance(double dt, qint64 now)
+{
+    if (!m_autopilot || !m_core) return;
+    if (now >= m_autoNextLookNs) {
+        m_autoNextLookNs = now + 250'000'000;
+        QPointF t;
+        if (pickAutopilotTarget(&t)) {
+            m_autoTarget = t;
+            m_autoHasTarget = true;
+            m_autoBackOut = 0;
+        } else if (m_core->frontFrame() && m_autoBackOut <= 0) {
+            m_autoHasTarget = false;
+            m_autoBackOut = 1.2;   // nothing to see here: back out until there is
+        }
+    }
+    const render::CoreStatus st = m_core->status();
+    double rate = m_autoRate;
+    // Don't run ahead of the pictures: slow down when the newest one is far shallower than the view.
+    if (const render::RawFrame* f = m_core->frontFrame()) {
+        const double lag = f->view.scale.log2Abs() - m_view.scale.log2Abs();
+        if (lag > 3.0) rate = 0;
+        else if (lag > 1.5) rate *= 0.3;
+    }
+    if (st.waiting) rate = 0;   // the reference orbit for this depth is still being computed
+    if (m_autoBackOut > 0) {
+        rate = -1.5 * m_autoRate;
+        m_autoBackOut -= dt;
+        if (m_view.scale > core::FloatExp(2.0)) rate = 0;
+    }
+    const double factor = std::exp(rate * dt);
+    if (factor > 1.0 && m_view.scale * core::FloatExp(1.0 / factor) < m_core->minimumScale()) {
+        setAutopilot(false);
+        emit zoomLimitReached(QStringLiteral("The autopilot stopped at the deepest zoom power %1 allows (about 1e-24).")
+                                  .arg(m_fractal.power));
+        return;
+    }
+    m_view.zoomAt(0, 0, factor);
+    if (m_autoHasTarget) m_autoTarget *= factor;
+    if (m_autoHasTarget && now >= m_userSteersUntilNs) {
+        QPointF step = m_autoTarget * (1.0 - std::exp(-dt / 1.1));
+        const double len = std::hypot(step.x(), step.y()), maxLen = 0.4 * dt;
+        if (len > maxLen) step *= maxLen / len;
+        m_view.pan(step.x(), step.y());
+        m_autoTarget -= step;
+    }
+    markChanged();
+}
+
+void FractalView::autopilotSteps(int frames, double secondsPerFrame)
+{
+    if (!m_ok || !m_autopilot) return;
+    makeCurrent();
+    const qreal dpr = devicePixelRatioF();
+    const int W = std::max(1, int(width() * dpr)), H = std::max(1, int(height() * dpr));
+    qint64 now = m_clock.nsecsElapsed();
+    for (int i = 0; i < frames && m_autopilot; ++i) {
+        now += qint64(secondsPerFrame * 1e9);
+        m_core->setView(m_view);
+        m_core->setOutputSize(W, H);
+        // Each simulated frame waits for its picture, as a fast graphics card would deliver it.
+        bool more = true;
+        for (int k = 0; k < 50 && more; ++k) more = m_core->step(50.0, true);
+        autopilotAdvance(secondsPerFrame, now);
+    }
+    doneCurrent();
 }
 
 void FractalView::placePreview()

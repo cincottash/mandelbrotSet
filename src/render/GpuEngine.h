@@ -97,6 +97,8 @@ public:
     QImage readTarget(const ColorTarget& t);
     // The raw numbers of a frame (4 floats per raw pixel, row 0 at the top): which = 0 or 1. For tests.
     std::vector<float> readRaw(const RawFrame& f, int which);
+    // A small copy of the first raw texture (nearest pixels, at most maxW wide), for a quick look at the picture.
+    std::vector<float> readRawSmall(const RawFrame& f, int maxW, int* w, int* h);
     // Fill the bound framebuffer with one color.
     void clear(int w, int h, const QColor& c);
 
