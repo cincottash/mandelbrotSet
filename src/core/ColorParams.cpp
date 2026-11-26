@@ -65,6 +65,13 @@ const QList<SliderSpec>& sliderSpecs()
          0.3, 15.0, 2.5, 1, "%", true, false, &C::bloomSize, 0},
         {"bloom_threshold", "Bloom Threshold", "EFFECTS", "How bright a color must be to glow. Lower makes more of the picture glow.",
          0.0, 1.0, 0.6, 2, "", false, false, &C::bloomThreshold, 0},
+
+        {"sphere_size", "Ball Size", "SPHERE", "Wraps the picture onto a ball this big (a share of the picture's height). 0 keeps it flat.",
+         0.0, 0.98, 0.0, 2, "", false, false, &C::sphereSize, 0},
+        {"sphere_shade", "Ball Shading", "SPHERE", "How much the light (from the LIGHTING card's direction) rounds the ball.",
+         0.0, 1.0, 0.6, 2, "", false, false, &C::sphereShade, 0},
+        {"sphere_shine", "Ball Shine", "SPHERE", "A glossy highlight where the light reflects off the ball.",
+         0.0, 1.0, 0.5, 2, "", false, false, &C::sphereShine, 0},
     };
     return list;
 }
@@ -106,6 +113,7 @@ QJsonObject ColorParams::toJson() const
     o.insert(QStringLiteral("interior_style"), interiorStyle);
     o.insert(QStringLiteral("interior_color"), colorText(interiorColor));
     o.insert(QStringLiteral("interior_color_2"), colorText(interiorColor2));
+    o.insert(QStringLiteral("sphere_background"), colorText(sphereBackground));
     return o;
 }
 
@@ -129,6 +137,7 @@ void ColorParams::fromJson(const QJsonObject& o)
                                int(interiorStyleNames().size()) - 1);
     interiorColor = color("interior_color", d.interiorColor);
     interiorColor2 = color("interior_color_2", d.interiorColor2);
+    sphereBackground = color("sphere_background", d.sphereBackground);
 }
 
 const QList<Look>& looks()

@@ -98,7 +98,8 @@ bool GpuEngine::init(QString* error)
     const QByteArray color = loadShader(QStringLiteral("colorize.frag"));
     const QByteArray disp = loadShader(QStringLiteral("display.frag"));
     const QByteArray bloomSrc = loadShader(QStringLiteral("bloom.frag"));
-    if (iter.isEmpty() || vert.isEmpty() || color.isEmpty() || disp.isEmpty() || bloomSrc.isEmpty()) {
+    const QByteArray sphereSrc = loadShader(QStringLiteral("sphere.frag"));
+    if (iter.isEmpty() || vert.isEmpty() || color.isEmpty() || disp.isEmpty() || bloomSrc.isEmpty() || sphereSrc.isEmpty()) {
         if (error) *error = QStringLiteral("The shader files are missing from the program.");
         return false;
     }
@@ -127,7 +128,12 @@ bool GpuEngine::init(QString* error)
         const unsigned v = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
         const unsigned b = v ? compile(QStringLiteral("bloom"), head + bloomSrc, GL_FRAGMENT_SHADER, &err) : 0;
         m_progBloom = b ? link({v, b}, &err) : 0;
-        if (!m_progBloom) {
+        if (m_progBloom) {
+            const unsigned v2 = compile(QStringLiteral("fullscreen"), head + vert, GL_VERTEX_SHADER, &err);
+            const unsigned sp = v2 ? compile(QStringLiteral("sphere"), head + sphereSrc, GL_FRAGMENT_SHADER, &err) : 0;
+            m_progSphere = sp ? link({v2, sp}, &err) : 0;
+        }
+        if (!m_progBloom || !m_progSphere) {
             glDeleteProgram(m_progDisplay);
             m_progDisplay = 0;
         }
@@ -174,8 +180,9 @@ bool GpuEngine::init(QString* error)
 void GpuEngine::release()
 {
     if (!QOpenGLContext::currentContext()) return;
-    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay, &m_progBloom})
+    for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay, &m_progBloom, &m_progSphere})
         if (*p) { glDeleteProgram(*p); *p = 0; }
+    freeTarget(m_scratch);
     for (int i = 0; i < 2; ++i) {
         if (m_bloomFbo[i]) { glDeleteFramebuffers(1, &m_bloomFbo[i]); m_bloomFbo[i] = 0; }
         if (m_bloomTex[i]) { glDeleteTextures(1, &m_bloomTex[i]); m_bloomTex[i] = 0; }
@@ -569,11 +576,41 @@ void GpuEngine::colorize(const RawFrame& raw, const core::ColorParams& c, double
         glActiveTexture(GLenum(GL_TEXTURE0 + unit));
         glBindTexture(GL_TEXTURE_2D, 0);
     }
-    // A picture drawn in pieces gets its bloom once whole (on the CPU, RenderCore::renderImage).
+    // A picture drawn in pieces gets its ball and bloom once whole (on the CPU, RenderCore::renderImage).
+    if (c.sphereSize > 0 && onePiece) sphere(target, c);
     if (c.bloom > 0 && onePiece) bloom(target, c);
     glBindFramebuffer(GL_FRAMEBUFFER, GLuint(prevFbo));
     target.view = raw.view;
     target.valid = true;
+    target.fixed = c.sphereSize > 0;
+}
+
+void GpuEngine::sphere(ColorTarget& target, const core::ColorParams& c)
+{
+    ensureTarget(m_scratch, target.w, target.h);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_scratch.fbo);
+    glViewport(0, 0, target.w, target.h);
+    glUseProgram(m_progSphere);
+    auto loc = [&](const char* n) { return glGetUniformLocation(m_progSphere, n); };
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, target.tex);
+    glUniform1i(loc("uSrc"), 0);
+    glUniform2i(loc("uSize"), target.w, target.h);
+    glUniform1f(loc("uRadius"), float(c.sphereSize * target.h / 2.0));
+    const double a = c.lightAngle * M_PI / 180.0, h = c.lightHeight * M_PI / 180.0;
+    glUniform3f(loc("uLight"), float(std::cos(a) * std::cos(h)), float(std::sin(a) * std::cos(h)), float(std::sin(h)));
+    glUniform1f(loc("uShade"), float(c.sphereShade));
+    glUniform1f(loc("uShine"), float(c.sphereShine));
+    glUniform3f(loc("uBg"), float(c.sphereBackground.redF()), float(c.sphereBackground.greenF()), float(c.sphereBackground.blueF()));
+    glBindVertexArray(m_vao);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_scratch.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target.fbo);
+    glBlitFramebuffer(0, 0, target.w, target.h, 0, 0, target.w, target.h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, target.fbo);
 }
 
 void GpuEngine::bloom(ColorTarget& target, const core::ColorParams& c)
@@ -637,8 +674,9 @@ void GpuEngine::display(const ColorTarget& picture, const core::View& cur, int s
         clear(screenW, screenH, bg);
         return;
     }
-    // q_old = M q_new + T, with M = (s1 / s0) R(a1 - a0) and T = R(-a0) (c1 - c0) / s0.
-    const core::View& old = picture.view;
+    // q_old = M q_new + T, with M = (s1 / s0) R(a1 - a0) and T = R(-a0) (c1 - c0) / s0. A ball stays where it is
+    // (its picture changes on it with the next render).
+    const core::View& old = picture.fixed ? cur : picture.view;
     const double ratio = (cur.scale / old.scale).toDouble();
     const double da = cur.angle - old.angle;
     const core::ComplexExp dcen = cur.centerOffsetFrom(old.cx, old.cy) * (core::FloatExp(1.0) / old.scale);

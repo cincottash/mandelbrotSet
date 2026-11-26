@@ -2,6 +2,7 @@
 
 #include "core/Bloom.h"
 #include "core/Palette.h"
+#include "core/Sphere.h"
 
 #include <QElapsedTimer>
 #include <QPainter>
@@ -572,7 +573,19 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
         if (error) *error = QStringLiteral("Cancelled.");
         return {};
     }
-    // The glow spans the pieces, so it is added once the picture is whole.
+    // The ball and the glow span the pieces, so they are added once the picture is whole.
+    if (m_colors.sphereSize > 0) {
+        core::SphereLook s;
+        s.size = m_colors.sphereSize;
+        s.shade = m_colors.sphereShade;
+        s.shine = m_colors.sphereShine;
+        s.background = m_colors.sphereBackground;
+        const double a = m_colors.lightAngle * M_PI / 180.0, hh = m_colors.lightHeight * M_PI / 180.0;
+        s.lightX = std::cos(a) * std::cos(hh);
+        s.lightY = std::sin(a) * std::cos(hh);
+        s.lightZ = std::sin(hh);
+        out = core::applySphere(out, s);
+    }
     core::applyBloom(out, m_colors.bloom, m_colors.bloomSize, m_colors.bloomThreshold);
     return out;
 }

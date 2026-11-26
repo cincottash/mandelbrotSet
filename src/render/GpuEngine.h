@@ -60,6 +60,7 @@ struct ColorTarget {
     int w = 0, h = 0;
     core::View view;              // the view the picture shows
     bool valid = false;
+    bool fixed = false;           // drawn as it is while the view moves (the picture is on a ball)
 };
 
 class GpuEngine : protected QOpenGLFunctions_4_3_Core {
@@ -111,8 +112,10 @@ private:
     void dispatchTile(const QRect& r, int slot, int budget, bool resume, int pixelSet);
     void bindPassUniforms();
     void bloom(ColorTarget& target, const core::ColorParams& c);   // the glow, on the finished colors
+    void sphere(ColorTarget& target, const core::ColorParams& c);  // the picture wrapped onto a ball
 
-    unsigned m_progBloom = 0;
+    unsigned m_progBloom = 0, m_progSphere = 0;
+    ColorTarget m_scratch;
     unsigned m_bloomTex[2] = {0, 0}, m_bloomFbo[2] = {0, 0};
     int m_bloomW = 0, m_bloomH = 0;
 

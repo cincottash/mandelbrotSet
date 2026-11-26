@@ -190,6 +190,7 @@ private:
     ColorButton* m_in1 = nullptr;
     ColorButton* m_in2 = nullptr;
     QLabel* m_in2Label = nullptr;
+    ColorButton* m_sphereBg = nullptr;
     // PLACES
     QListWidget* m_places = nullptr;
     QPushButton* m_goPlace = nullptr;

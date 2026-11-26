@@ -567,7 +567,7 @@ QFrame* MainWindow::makeCard(const QString& title, QVBoxLayout** body)
     head->addStretch();
     static const QStringList resettable = {QStringLiteral("FRACTAL"), QStringLiteral("COLOR"), QStringLiteral("SINE WAVES"),
                                            QStringLiteral("LIGHTING"), QStringLiteral("EDGES"), QStringLiteral("INTERIOR"),
-                                           QStringLiteral("EFFECTS")};
+                                           QStringLiteral("EFFECTS"), QStringLiteral("SPHERE")};
     if (resettable.contains(title)) {
         auto* reset = linkButton(QStringLiteral("Reset"));
         reset->setProperty("testId", QStringLiteral("reset ") + title);
@@ -937,6 +937,20 @@ void MainWindow::buildUi()
     }
     {
         QVBoxLayout* b = nullptr;
+        m_leftCol->addWidget(makeCard(QStringLiteral("SPHERE"), &b));
+        QGridLayout* g = sliderGrid("SPHERE", b);
+        const int r = g->rowCount();
+        g->addWidget(new QLabel(QStringLiteral("Background")), r, 0);
+        m_sphereBg = new ColorButton(QStringLiteral("Background Behind the Ball"));
+        m_sphereBg->setProperty("testId", QStringLiteral("sphereBackground"));
+        g->addWidget(m_sphereBg, r, 1, 1, 2, Qt::AlignLeft);
+        connect(m_sphereBg, &ColorButton::colorChanged, this, [this](const QColor& c) {
+            m_colors.sphereBackground = c;
+            colorsEdited();
+        });
+    }
+    {
+        QVBoxLayout* b = nullptr;
         m_leftCol->addWidget(makeCard(QStringLiteral("PLACES"), &b));
         buildPlaces(b);
     }
@@ -1104,6 +1118,7 @@ void MainWindow::syncControls()
     m_interior->setCurrentIndex(m_colors.interiorStyle);
     m_in1->setColor(m_colors.interiorColor);
     m_in2->setColor(m_colors.interiorColor2);
+    m_sphereBg->setColor(m_colors.sphereBackground);
     for (const core::SliderSpec& sp : core::sliderSpecs())
         if (SliderRow* r = m_rows.value(QString::fromLatin1(sp.key))) r->setValue(m_colors.*(sp.member));
     // The Look list names the look the colors match, or "Custom".
@@ -1220,6 +1235,8 @@ void MainWindow::resetCard(const QString& title)
             updateStyleVisibility();
         } else if (title == QLatin1String("EDGES")) {
             m_colors.edgeColor = dc.edgeColor;
+        } else if (title == QLatin1String("SPHERE")) {
+            m_colors.sphereBackground = dc.sphereBackground;
         } else if (title == QLatin1String("INTERIOR")) {
             m_colors.interiorStyle = dc.interiorStyle;
             m_colors.interiorColor = dc.interiorColor;

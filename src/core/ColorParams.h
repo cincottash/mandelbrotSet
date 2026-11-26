@@ -47,6 +47,10 @@ struct ColorParams {
     double vignette = 0.0, grain = 0.0;
     double bloom = 0.0, bloomSize = 2.5, bloomThreshold = 0.6;   // bloomSize: % of the picture's height
 
+    // The picture wrapped onto a ball (core/Sphere.h); size 0 = flat.
+    double sphereSize = 0.0, sphereShade = 0.6, sphereShine = 0.5;
+    QColor sphereBackground{0x0B, 0x0D, 0x12};
+
     QJsonObject toJson() const;
     void fromJson(const QJsonObject& o);
     bool operator==(const ColorParams& o) const { return toJson() == o.toJson(); }

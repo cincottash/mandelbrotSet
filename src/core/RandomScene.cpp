@@ -271,6 +271,10 @@ ColorParams randomColors(QRandomGenerator& rnd, const ColorParams& base)
     c.bloom = chance(rnd, 0.3) ? uniform(rnd, 0.3, 1.2) : 0.0;
     c.bloomSize = logUniform(rnd, 1.0, 6.0);
     c.bloomThreshold = uniform(rnd, 0.45, 0.8);
+    c.sphereSize = chance(rnd, 0.1) ? uniform(rnd, 0.6, 0.9) : 0.0;
+    c.sphereShade = uniform(rnd, 0.4, 0.8);
+    c.sphereShine = uniform(rnd, 0.2, 0.8);
+    c.sphereBackground = randomColor(rnd, 5, 30);
     return c;
 }
 
