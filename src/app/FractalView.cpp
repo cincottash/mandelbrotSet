@@ -6,6 +6,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QSurfaceFormat>
+#include <QThread>
 #include <QWheelEvent>
 
 #include <algorithm>
@@ -528,6 +529,7 @@ void FractalView::setAutopilot(bool on)
     m_autoHasTarget = false;
     m_autoNextLookNs = 0;
     m_autoBackOut = 0;
+    m_autoEmptyStreak = 0;
     stopMotion();
     emit autopilotChanged(on);
     markChanged();
@@ -595,9 +597,13 @@ void FractalView::autopilotAdvance(double dt, qint64 now)
             m_autoTarget = t;
             m_autoHasTarget = true;
             m_autoBackOut = 0;
+            m_autoEmptyStreak = 0;
         } else if (m_core->frontFrame() && m_autoBackOut <= 0) {
             m_autoHasTarget = false;
             m_autoBackOut = 1.2;   // nothing to see here: back out until there is
+            // Each empty look in a row backs out twice as fast (up to 4x), so a dead end is left quickly without
+            // overshooting far past the detail (16x went from 1e42 all the way out to 1e14).
+            m_autoEmptyStreak = std::min(m_autoEmptyStreak + 1, 3);
         }
     }
     const render::CoreStatus st = m_core->status();
@@ -610,7 +616,7 @@ void FractalView::autopilotAdvance(double dt, qint64 now)
     }
     if (st.waiting) rate = 0;   // the reference orbit for this depth is still being computed
     if (m_autoBackOut > 0) {
-        rate = -1.5 * m_autoRate;
+        rate = -1.5 * m_autoRate * std::exp2(std::max(0, m_autoEmptyStreak - 1));
         m_autoBackOut -= dt;
         if (m_view.scale > core::FloatExp(2.0)) rate = 0;
     }
@@ -646,7 +652,10 @@ void FractalView::autopilotSteps(int frames, double secondsPerFrame)
         m_core->setOutputSize(W, H);
         // Each simulated frame waits for its picture, as a fast graphics card would deliver it.
         bool more = true;
-        for (int k = 0; k < 50 && more; ++k) more = m_core->step(50.0, true);
+        for (int k = 0; k < 50 && more && !m_core->status().waiting; ++k) more = m_core->step(50.0, true);
+        // While a reference orbit is computed, a frame takes its real length (the worker needs the time).
+        if (m_core->status().waiting || m_core->status().referenceBusy)
+            QThread::msleep(static_cast<unsigned long>(secondsPerFrame * 1000));
         autopilotAdvance(secondsPerFrame, now);
     }
     doneCurrent();

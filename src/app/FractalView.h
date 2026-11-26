@@ -154,6 +154,7 @@ private:
     qint64 m_autoNextLookNs = 0;
     qint64 m_userSteersUntilNs = 0;
     double m_autoBackOut = 0;     // seconds left of zooming out after the view went empty
+    int m_autoEmptyStreak = 0;    // empty looks in a row
 
     // Julia preview
     bool m_juliaPreview = false;

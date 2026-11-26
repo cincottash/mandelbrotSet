@@ -133,6 +133,9 @@ bool GpuEngine::init(QString* error)
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, b);
         glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(zero), zero, GL_DYNAMIC_DRAW);
     }
+    glGenBuffers(1, &m_state);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_state);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(kMaxTile) * kMaxTile * 5 * 16, nullptr, GL_DYNAMIC_COPY);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     glGenTextures(1, &m_paletteTex);
     glBindTexture(GL_TEXTURE_2D, m_paletteTex);
@@ -152,7 +155,7 @@ void GpuEngine::release()
     if (!QOpenGLContext::currentContext()) return;
     for (unsigned* p : {&m_progF, &m_progX, &m_progColor, &m_progDisplay})
         if (*p) { glDeleteProgram(*p); *p = 0; }
-    for (unsigned* b : {&m_refF, &m_refX, &m_blaF, &m_blaX, &m_stats})
+    for (unsigned* b : {&m_refF, &m_refX, &m_blaF, &m_blaX, &m_stats, &m_state})
         if (*b) { glDeleteBuffers(1, b); *b = 0; }
     if (m_vao) { glDeleteVertexArrays(1, &m_vao); m_vao = 0; }
     if (m_paletteTex) { glDeleteTextures(1, &m_paletteTex); m_paletteTex = 0; }
@@ -239,7 +242,10 @@ void GpuEngine::startPass(RawFrame& frame, const PassParams& p)
 
     // Big tiles for quick views, small ones when every pixel takes long (keeps each slice short, so the screen and
     // the graphics driver never wait long).
-    m_tileSize = p.maxIterations > 400000 ? 32 : p.maxIterations > 40000 ? 64 : 128;
+    m_chunked = p.maxIterations > chunk();
+    m_tileActive = false;
+    m_tileResume = false;
+    m_tileSize = kMaxTile;
     m_tiles.clear();
     QList<QRect> tiles;
     for (int y = 0; y < frame.rawH; y += m_tileSize)
@@ -300,10 +306,12 @@ void GpuEngine::bindPassUniforms()
     glUniform1f(loc("uStripeDensity"), float(p.stripeDensity));
 }
 
-void GpuEngine::dispatchTile(const QRect& r)
+void GpuEngine::dispatchTile(const QRect& r, int budget, bool resume)
 {
     glUniform2i(glGetUniformLocation(m_passProg, "uOrigin"), r.x(), r.y());
     glUniform2i(glGetUniformLocation(m_passProg, "uTileSize"), r.width(), r.height());
+    glUniform1i(glGetUniformLocation(m_passProg, "uIterBudget"), budget);
+    glUniform1i(glGetUniformLocation(m_passProg, "uResume"), resume ? 1 : 0);
     glDispatchCompute(GLuint((r.width() + 7) / 8), GLuint((r.height() + 7) / 8), 1);
 }
 
@@ -322,8 +330,46 @@ bool GpuEngine::continuePass(RawFrame& frame, double budgetMs)
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_blaF);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_blaX);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_stats);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, m_state);
 
-    while (!m_tiles.empty()) {
+    // Many iterations: one tile at a time, in short dispatches that each pixel resumes from its saved state.
+    while (m_chunked && (m_tileActive || !m_tiles.empty())) {
+        if (double(timer.nsecsElapsed()) / 1e6 >= budgetMs) break;
+        if (!m_tileActive) {
+            QRect r = m_tiles.front();
+            m_tiles.pop_front();
+            if (r.width() > kMaxTile || r.height() > kMaxTile) {   // never bigger than the saved state holds
+                for (int y = r.top(); y <= r.bottom(); y += kMaxTile)
+                    for (int x = r.left(); x <= r.right(); x += kMaxTile)
+                        m_tiles.push_front(QRect(x, y, std::min(kMaxTile, r.right() + 1 - x), std::min(kMaxTile, r.bottom() + 1 - y)));
+                continue;
+            }
+            m_tile = r;
+            m_tileActive = true;
+            m_tileResume = false;
+        }
+        const quint32 zero = 0;
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_stats);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, offsetof(PassStats, unfinished), sizeof(zero), &zero);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        QElapsedTimer t;
+        t.start();
+        dispatchTile(m_tile, chunk(), m_tileResume);
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+        quint32 unfinished = 0;
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_stats);
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, offsetof(PassStats, unfinished), sizeof(unfinished), &unfinished);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        frame.gpuMs += double(t.nsecsElapsed()) / 1e6;
+        if (unfinished == 0) {
+            m_tileActive = false;
+            m_donePixels += qint64(m_tile.width()) * m_tile.height();
+        } else {
+            m_tileResume = true;
+        }
+    }
+
+    while (!m_chunked && !m_tiles.empty()) {
         const double left = budgetMs - double(timer.nsecsElapsed()) / 1e6;
         if (left <= 0) break;
         // A batch of tiles that should fit in the time left (one tile while the speed isn't known yet).
@@ -341,14 +387,17 @@ bool GpuEngine::continuePass(RawFrame& frame, double budgetMs)
                 continue;
             }
             const long long px = qint64(r.width()) * r.height();
-            if (!batch.isEmpty() && (m_msPerPixel < 0 || double(pixels + px) * m_msPerPixel > left)) break;
+            // The estimate comes from the tiles done so far, and the next ones may be far slower (all inside):
+            // a batch's worst case (every pixel running the full limit) also stays under a fixed amount of work.
+            const bool tooMuchAtWorst = double(pixels + px) * double(m_pass.maxIterations) > kWorkCap;
+            if (!batch.isEmpty() && (m_msPerPixel < 0 || double(pixels + px) * m_msPerPixel > left || tooMuchAtWorst)) break;
             batch << r;
             pixels += px;
             m_tiles.pop_front();
         }
         QElapsedTimer t;
         t.start();
-        for (const QRect& r : batch) dispatchTile(r);
+        for (const QRect& r : batch) dispatchTile(r, m_pass.maxIterations, false);
         glFinish();
         const double ms = double(t.nsecsElapsed()) / 1e6;
         frame.gpuMs += ms;
@@ -358,7 +407,7 @@ bool GpuEngine::continuePass(RawFrame& frame, double budgetMs)
         if (batch.size() == 1 && ms > 120 && m_tileSize > 16) m_tileSize /= 2;
     }
     glUseProgram(0);
-    if (!m_tiles.empty()) return false;
+    if (!m_tiles.empty() || m_tileActive) return false;
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_stats);
     glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(PassStats), &frame.stats);

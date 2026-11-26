@@ -15,8 +15,12 @@ layout(std430, binding = 2) readonly buffer BlaF { BlaFEntry blaF[]; };
 struct BlaXEntry { vec4 ab; ivec2 e; float log2R; float pad; };
 layout(std430, binding = 3) readonly buffer BlaX { BlaXEntry blaX[]; };
 layout(std430, binding = 4) buffer Stats {
-    uint maxN; uint maxIdx; uint glitches; uint nearMax; uint escaped; uint maxEscN; uint inside; uint pad;
+    uint maxN; uint maxIdx; uint glitches; uint nearMax; uint escaped; uint maxEscN; uint inside; uint unfinished;
 } stats;
+// A pixel that needs more iterations than one dispatch may run saves where it is here and goes on in the next
+// dispatch, so no single dispatch runs long enough for the graphics driver to reset (Windows allows about 2 s).
+// Five vec4 per pixel of the tile.
+layout(std430, binding = 5) buffer State { vec4 st[]; };
 
 uniform ivec2 uOrigin;
 uniform ivec2 uTileSize;
@@ -41,6 +45,8 @@ uniform int uBlaOffset[32];
 uniform int uBlaCount[32];
 uniform bool uStripe;
 uniform float uStripeDensity;
+uniform int uIterBudget;      // iterations a pixel may run in this dispatch
+uniform bool uResume;         // go on from the saved state (a later dispatch of the same tile)
 
 const int ZERO_E = -1000000000;
 const float BIG = 1.0e30;
@@ -152,6 +158,9 @@ void main()
     float minR2 = BIG;
     float stripe = 0.0, stripePrev = 0.0;
     int stripeCount = 0;
+    bool finished = true;   // false: the budget ran out first; the state is saved for the next dispatch
+    bool skip = false;      // finished in an earlier dispatch of this tile: nothing to do
+    const int si = (local.y * uTileSize.x + local.x) * 5;
 
     if (inTile) {
         vec2 q =(vec2(p) + 0.5 + uJitter - 0.5 * vec2(uSize)) * uInvHalfH;
@@ -180,7 +189,34 @@ void main()
 #endif
         r2 = dot(z, z);
 
-        while (n < uMaxIter) {
+        if (uResume) {
+            const int flags = floatBitsToInt(st[si + 3].w);
+            if ((flags & 2) != 0) skip = true;
+            vec4 s0 = st[si], s1 = st[si + 1], s2 = st[si + 2], s3 = st[si + 3];
+            Dm = s0.zw;
+            z = s1.xy;
+            firstR = s1.z;
+            minR2 = s1.w;
+            stripe = s2.x;
+            stripePrev = s2.y;
+            stripeCount = floatBitsToInt(s2.z);
+            r2 = s2.w;
+            m = floatBitsToInt(s3.x);
+            n = floatBitsToInt(s3.y);
+            De = floatBitsToInt(s3.z);
+            glitch = (flags & 1) != 0;
+#ifdef TIER_X
+            dzF = s0.xy;
+            vec4 s4 = st[si + 4];
+            dzX = FC(s4.xy, floatBitsToInt(s4.z));
+            wide = floatBitsToInt(s4.w) != 0;
+#else
+            dz = s0.xy;
+#endif
+        }
+        const int nStop = skip ? n : min(uMaxIter, n + uIterBudget);
+
+        while (n < nStop) {
             // 1. Skip ahead with the table while the offset is small enough.
             if (uBlaLevels > 0 && m > 0 && ((m - 1) & 1) == 0) {
                 int base = m - 1;
@@ -330,9 +366,27 @@ void main()
             }
         }
         if (firstR == 0.0 && r2 > 4.0) firstR = sqrt(r2);
+        if (!skip && inside && n < uMaxIter) {
+            // Out of budget: save where this pixel is, for the next dispatch.
+            finished = false;
+            int flags = glitch ? 1 : 0;
+#ifdef TIER_X
+            st[si] = vec4(dzF, Dm);
+            st[si + 4] = vec4(dzX.m, intBitsToFloat(dzX.e), intBitsToFloat(wide ? 1 : 0));
+#else
+            st[si] = vec4(dz, Dm);
+#endif
+            st[si + 1] = vec4(z, firstR, minR2);
+            st[si + 2] = vec4(stripe, stripePrev, intBitsToFloat(stripeCount), r2);
+            st[si + 3] = vec4(intBitsToFloat(m), intBitsToFloat(n), intBitsToFloat(De), intBitsToFloat(flags));
+            atomicAdd(stats.unfinished, 1u);
+        } else if (!skip) {
+            st[si + 3].w = intBitsToFloat(2);   // done: later dispatches of this tile leave it alone
+        }
     }
 
-    if (inTile) {
+    const bool report = inTile && !skip && finished;
+    if (report) {
         vec4 o0, o1;
         if (inside) {
             o0 = vec4(-1.0, 0.0, 0.0, 0.0);
@@ -346,9 +400,9 @@ void main()
             vec2 u = cmul(z, vec2(Dm.x, -Dm.y));
             float ul = length(u);
             vec2 nrm = ul > 0.0 ? u / ul : vec2(0.0);
-            float st = mix(stripePrev, stripe, clamp(fract(mu), 0.0, 1.0));
+            float stripeV = mix(stripePrev, stripe, clamp(fract(mu), 0.0, 1.0));
             o0 = vec4(mu, de, nrm);
-            o1 = vec4(firstR, atan(z.y, z.x), st, 0.0);
+            o1 = vec4(firstR, atan(z.y, z.x), stripeV, 0.0);
         }
         imageStore(uOut0, p, o0);
         imageStore(uOut1, p, o1);
@@ -364,7 +418,7 @@ void main()
         }
     }
     barrier();
-    if (inTile) {
+    if (report) {
         // One pixel of the group that reached the most iterations names a spot for a better reference.
         if (uint(n) == sMaxN) atomicExchange(sMaxIdx, uint(p.y * uSize.x + p.x));
     }

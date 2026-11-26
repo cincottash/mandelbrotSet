@@ -17,7 +17,7 @@
 namespace render {
 
 struct PassStats {
-    quint32 maxN = 0, maxIdx = 0, glitches = 0, nearMax = 0, escaped = 0, maxEscN = 0, inside = 0, pad = 0;
+    quint32 maxN = 0, maxIdx = 0, glitches = 0, nearMax = 0, escaped = 0, maxEscN = 0, inside = 0, unfinished = 0;
 };
 
 struct PassParams {
@@ -81,7 +81,7 @@ public:
     void startPass(RawFrame& frame, const PassParams& p);
     // Works until the budget is spent. True when the whole frame is done.
     bool continuePass(RawFrame& frame, double budgetMs);
-    bool passPending() const { return !m_tiles.empty(); }
+    bool passPending() const { return !m_tiles.empty() || m_tileActive; }
     double passProgress() const;
 
     void setPalette(const QVector<quint32>& rgba);
@@ -106,7 +106,7 @@ private:
     unsigned compile(const QString& name, const QByteArray& source, unsigned type, QString* error);
     unsigned link(std::initializer_list<unsigned> shaders, QString* error);
     void ensureFrameTextures(RawFrame& f, int w, int h);
-    void dispatchTile(const QRect& r);
+    void dispatchTile(const QRect& r, int budget, bool resume);
     void bindPassUniforms();
 
     bool m_ready = false;
@@ -127,6 +127,23 @@ private:
     double m_msPerPixel = -1;     // measured; -1 until known
     int m_tileSize = 128;
     unsigned m_passProg = 0;
+    // Passes with many iterations go one tile at a time, in dispatches of at most kChunk iterations per pixel
+    // (each pixel saves its state between them), so no dispatch runs long enough for the driver to reset.
+    unsigned m_state = 0;
+    bool m_chunked = false;
+    bool m_tileActive = false;    // a tile is part way done
+    bool m_tileResume = false;
+    QRect m_tile;
+
+public:
+    static constexpr int kChunk = 20000;              // iterations per pixel per dispatch
+    static constexpr double kWorkCap = 4.0e8;         // most pixel-iterations one batch may need, at worst
+    static constexpr int kMaxTile = 128;
+    void setChunkForTests(int iterations) { m_chunkOverride = iterations; }   // 0 = normal
+
+private:
+    int m_chunkOverride = 0;
+    int chunk() const { return m_chunkOverride > 0 ? m_chunkOverride : kChunk; }
 };
 
 }  // namespace render

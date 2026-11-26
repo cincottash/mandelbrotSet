@@ -255,12 +255,21 @@ PassParams RenderCore::passParams(const core::View& v, int outW, int outH, int s
     return p;
 }
 
-bool RenderCore::needsMoreIterations(const PassStats& s, int maxIt, quint64 pixels)
+int RenderCore::raisedIterations(const PassStats& s, int maxIt, quint64 pixels, const core::View& v) const
 {
-    // "Many" = over 1 % of the escaping pixels escape in the limit's top half (a zoomed-out view has a thin
-    // boundary of slow pixels that never needs more).
-    return s.escaped > 0 && double(s.nearMax) > 0.01 * double(s.escaped) && double(s.nearMax) > 0.0005 * double(pixels)
-        && maxIt < core::FractalParams::kMaxIterations;
+    // Both rules stop at a cap that grows with the depth: 16 times the depth's base. (The seahorse spiral at 3e-30
+    // looked black at 11,388 and showed all its detail at 46,000.) Without it, the edge of a minibrot, where some
+    // pixels always escape late, pushed the limit to 5,000,000 and frames to seconds.
+    const int cap = int(std::min<double>(core::FractalParams::kMaxIterations, std::max(baseIterations(v) * 16.0, 20000.0)));
+    if (maxIt >= cap || pixels == 0) return 0;
+    // Many pixels escaping late (over 1 % of the escaping ones in the limit's top half): the limit cuts off detail.
+    // A zoomed-out view has a thin boundary of slow pixels that never needs more, hence the share of all pixels.
+    if (s.escaped > 0 && double(s.nearMax) > 0.01 * double(s.escaped) && double(s.nearMax) > 0.0005 * double(pixels))
+        return std::min(maxIt * 2, cap);
+    // Nearly everything "inside": deep down that usually means nothing has escaped *yet* (a black picture where the
+    // detail needs more iterations). Raise faster; the inside of a real cardioid or bulb stops at the cap.
+    if (double(s.inside) > 0.995 * double(pixels)) return std::min(maxIt * 4, cap);
+    return 0;
 }
 
 bool RenderCore::prepareReference(const core::View& deepest, int w, int h)
@@ -287,11 +296,13 @@ void RenderCore::afterFullPass(const RawFrame& f)
     const int maxIt = f.maxIterations;
     if (m_fractal.autoIterations) {
         // Many pixels escaping late: the limit cuts off detail, so raise it and render again.
-        if (needsMoreIterations(s, maxIt, pixels)) {
-            m_autoIter = std::min(maxIt * 2, core::FractalParams::kMaxIterations);
+        if (const int raised = raisedIterations(s, maxIt, pixels, f.view)) {
+            m_autoIter = raised;
             m_autoIterScaleLog2 = f.view.scale.log2Abs();
             m_dirty = true;
-        } else if (s.maxEscN > 0 && int(s.maxEscN) * 3 < maxIt && maxIt > baseIterations(f.view)) {
+        } else if (s.maxEscN > 0 && int(s.maxEscN) * 3 < maxIt && maxIt > baseIterations(f.view)
+                   && double(s.inside) < 0.5 * double(pixels)) {
+            // Far more than the slowest escaping pixel needs (and not a mostly-inside view): come back down.
             m_autoIter = std::max(baseIterations(f.view), int(s.maxEscN) * 2);
             m_autoIterScaleLog2 = f.view.scale.log2Abs();
         }
@@ -483,8 +494,9 @@ QImage RenderCore::renderImage(const core::View& v0, int w, int h, int ss, QStri
                     return {};
                 }
             }
-            if (!needsMoreIterations(frame.stats, maxIt, quint64(pw) * quint64(ph))) break;
-            maxIt = std::min(maxIt * 2, core::FractalParams::kMaxIterations);
+            const int raised = raisedIterations(frame.stats, maxIt, quint64(pw) * quint64(ph), v);
+            if (!raised) break;
+            maxIt = raised;
             m_autoIter = maxIt;
             m_autoIterScaleLog2 = v.scale.log2Abs();
             if (!ensureReference()) {

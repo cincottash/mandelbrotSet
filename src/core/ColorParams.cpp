@@ -180,11 +180,13 @@ const QList<Look>& looks()
         {
             ColorParams p;
             p.palette = QStringLiteral("Grayscale");
-            p.density = 0.25;
-            p.lightStrength = 1.0;
-            p.relief = 0.5;
-            p.specular = 0.5;
+            p.density = 0.7;
+            p.lightStrength = 0.9;
+            p.relief = 0.8;
+            p.specular = 0.45;
             p.saturation = 0.0;
+            p.brightness = -0.1;
+            p.contrast = 1.25;
             p.interiorColor = QColor(0x10, 0x10, 0x10);
             l.append({QStringLiteral("Embossed Stone"), p});
         }

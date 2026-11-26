@@ -69,7 +69,8 @@ public:
 
     // Computes a reference orbit for the deepest view of a movie now, so every frame of a zoom toward it reuses it.
     bool prepareReference(const core::View& deepest, int w, int h);
-    static bool needsMoreIterations(const PassStats& s, int maxIt, quint64 pixels);
+    // The iteration limit a finished render asks for (Auto iterations), or 0 when the limit is fine.
+    int raisedIterations(const PassStats& s, int maxIt, quint64 pixels, const core::View& v) const;
 
     // The deepest the current formula can zoom (power 2: practically unlimited).
     core::FloatExp minimumScale() const;
