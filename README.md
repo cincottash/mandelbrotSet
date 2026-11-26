@@ -11,7 +11,7 @@ movies, including seamless loops that repeat endlessly.
 Get `mandelbrotSet.exe` (Windows) from the [Releases](https://github.com/cincottash/mandelbrotSet/releases) page.
 It is one file: nothing to install. It needs a graphics card with OpenGL 4.3 (any card from about 2012 on).
 A Linux AppImage is built too and is **experimental**: it hasn't been run on a real Linux desktop yet, and MP4
-movies are Windows only there (WebP and PNG frames work).
+movies are Windows only there (WebP, GIF and PNG frames work).
 
 ## First run
 
@@ -29,6 +29,12 @@ fine. Then scroll to zoom.
 | **Right-click** | zoom or center here, the Julia set of this point, copy the point |
 | **J** | a live preview of the Julia set under the pointer |
 | **P** | autopilot |
+| **Space** | pause or resume the autopilot and color cycling |
+| **Ctrl+R** | Randomize: a random fractal, spot and colors |
+| **Ctrl+Z, Ctrl+Y** | undo and redo changes to the colors and the formula |
+
+**Randomize** (bottom left) picks a random fractal (Mandelbrot, Julia or a higher power), dives to a random spot
+with visible detail and colors it at random. Keep pressing it for new ones; Undo and Back return to earlier ones.
 
 The status line shows the center, the zoom, the iteration limit and how long the picture took. Back and Forward
 step through the views you visited. **Places** holds famous spots to start from and the ones you save.
@@ -38,15 +44,16 @@ step through the views you visited. **Places** holds famous spots to start from 
 Ten ready-made **Looks**, and every setting behind them as a slider: the style (smooth gradient, sine waves,
 distance bands, stripes, angle, and the original Python renders' **moiré fabric**), 20 palettes, density, offset,
 color cycling, lighting (angle, height, relief, shine), glowing edges, the inside's color or gradient, and effects
-(hue, saturation, brightness, contrast, gamma, vignette, film grain). Right-click any slider to put it back.
-Colors change instantly: only the fractal's shape takes rendering.
+(hue, saturation, brightness, contrast, gamma, vignette, film grain). Right-click any slider to put it back,
+click **Reset** on a card to put back all of that card's settings, or use **Edit > Reset Colors to Defaults**.
+Every change can be undone. Colors change instantly: only the fractal's shape takes rendering.
 
 ![Every look at the same place](docs/looks.png)
 
 ## Autopilot
 
 **Autopilot ▶** zooms in on its own, forever, steering toward the richest detail near the middle and backing out
-of empty views. Drag to steer it; Escape stops it.
+of empty views. Drag to steer it. **❚❚ Pause** (or Space) holds it where it is; **■ Stop** or Escape ends it.
 
 ![Twelve moments of one autopilot flight](docs/autopilot.png)
 
@@ -54,8 +61,8 @@ of empty views. Drag to steer it; Escape stops it.
 
 <img align="right" width="380" src="docs/record.png">
 
-**Record Zoom…** renders a dive from the whole set into the current view as an MP4 video, an animated WebP, or
-PNG frames, at any size up to 4K (8K and more as frames). **Seamless Loop** finds a mini Mandelbrot inside the
+**Record Zoom…** renders a dive from the whole set into the current view as an MP4 video, an animated WebP, an
+animated GIF or PNG frames, at any size up to 4K (8K and more as frames). **Seamless Loop** finds a mini Mandelbrot inside the
 view and zooms along the exact path into it. The mini copy looks like the whole set, the colors are matched at
 both ends and the wrap is blended, so the movie repeats forever.
 
@@ -74,7 +81,8 @@ drawn in pieces, so memory is never the limit.
 - **File:** Open Location…, Save Location…, Save Picture…, Copy Location, Paste Location, Settings (Change App
   Data Folder…, Reset Settings to Defaults…), Quit
 - **Explore:** Back, Forward, Reset View, Zoom In, Zoom Out, Turn Left, Turn Right, Straighten, Add to Places…,
-  Randomize Colors, Autopilot, Autopilot Speed, Record Zoom…
+  Randomize Everything, Randomize Colors, Autopilot, Pause Animation, Autopilot Speed, Record Zoom…
+- **Edit:** Undo, Redo, Reset Colors to Defaults, Reset Everything to Defaults
 - **View:** Theme, Window Opacity, Julia Preview, Anti-Aliasing, Zoom Speed, Always on Top, Full Screen, Reset View
   Options
 - **Help:** Mouse and Keys, Project Website, Open App Data Folder, Report a Problem, About
@@ -88,7 +96,7 @@ drawn in pieces, so memory is never the limit.
 mandelbrotSet.exe [location.json]                       open a location
 mandelbrotSet.exe --render location.json --out picture.png [--size 3840x2160] [--anti-aliasing 2]
 mandelbrotSet.exe --record location.json --out zoom.mp4 [--size 1920x1080] [--seconds 20] [--fps 30]
-                  [--anti-aliasing 2] [--loop]          a zoom movie (.mp4, .webp, or a folder for PNG frames)
+                  [--anti-aliasing 2] [--loop]          a zoom movie (.mp4, .webp, .gif, or a folder for PNG frames)
 mandelbrotSet.exe --screenshot window.png               a picture of the window (no dialogs; for checks)
 mandelbrotSet.exe --data-folder FOLDER                  keep settings in FOLDER for this run
 ```

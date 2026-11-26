@@ -1701,8 +1701,9 @@ void MainWindow::recordZoom()
         m_s.lastFolder = dir;
     } else {
         const QString ext = MovieWriter::extension(s.format);
-        const QString filter = s.format == MovieWriter::Format::Mp4 ? QStringLiteral("MP4 Videos (*.mp4)")
-                                                                     : QStringLiteral("Animated WebP (*.webp)");
+        const QString filter = s.format == MovieWriter::Format::Mp4   ? QStringLiteral("MP4 Videos (*.mp4)")
+                               : s.format == MovieWriter::Format::Gif ? QStringLiteral("Animated GIF (*.gif)")
+                                                                      : QStringLiteral("Animated WebP (*.webp)");
         path = QFileDialog::getSaveFileName(this, QStringLiteral("Save Zoom Movie"),
                                             QDir(m_s.lastFolder).filePath(QStringLiteral("zoom-%1%2").arg(stamp, ext)), filter,
                                             nullptr, filedialogs::options());

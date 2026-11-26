@@ -141,7 +141,7 @@ int main(int argc, char* argv[])
     QCommandLineOption out(QStringLiteral("out"), QStringLiteral("The picture --render saves (.png or .jpg)."), QStringLiteral("FILE"));
     QCommandLineOption size(QStringLiteral("size"), QStringLiteral("The picture size for --render, like 3840x2160 (default 1920x1080)."), QStringLiteral("WxH"));
     QCommandLineOption aa(QStringLiteral("anti-aliasing"), QStringLiteral("Samples per pixel side for --render and --record, 1 to 4 (default 2)."), QStringLiteral("N"), QStringLiteral("2"));
-    QCommandLineOption record(QStringLiteral("record"), QStringLiteral("Record a zoom movie from the whole set into the location file LOCATION (with --out: .mp4, .webp, or a folder for PNG frames) and quit."), QStringLiteral("LOCATION"));
+    QCommandLineOption record(QStringLiteral("record"), QStringLiteral("Record a zoom movie from the whole set into the location file LOCATION (with --out: .mp4, .webp, .gif, or a folder for PNG frames) and quit."), QStringLiteral("LOCATION"));
     QCommandLineOption seconds(QStringLiteral("seconds"), QStringLiteral("The movie's length for --record (default 20)."), QStringLiteral("S"), QStringLiteral("20"));
     QCommandLineOption fps(QStringLiteral("fps"), QStringLiteral("Frames per second for --record (default 30)."), QStringLiteral("N"), QStringLiteral("30"));
     QCommandLineOption loop(QStringLiteral("loop"), QStringLiteral("With --record: a seamless loop into the mini Mandelbrot nearest the location's center."));
@@ -160,7 +160,7 @@ int main(int argc, char* argv[])
     if (cli.isSet(record)) {
         // A movie without any window on the screen; progress and problems go to the command line.
         if (!cli.isSet(out)) {
-            say(QStringLiteral("--record needs --out FILE (.mp4 or .webp) or --out FOLDER (PNG frames)."));
+            say(QStringLiteral("--record needs --out FILE (.mp4, .webp or .gif) or --out FOLDER (PNG frames)."));
             return 2;
         }
         core::Location loc;
@@ -193,9 +193,7 @@ int main(int argc, char* argv[])
         rs.size = sz;
         rs.samplesPerSide = std::clamp(cli.value(aa).toInt(), 1, 4);
         const QString o = cli.value(out);
-        rs.format = o.endsWith(QStringLiteral(".mp4"), Qt::CaseInsensitive) ? MovieWriter::Format::Mp4
-                    : o.endsWith(QStringLiteral(".webp"), Qt::CaseInsensitive) ? MovieWriter::Format::WebP
-                                                                                 : MovieWriter::Format::PngFrames;
+        rs.format = MovieWriter::fromPath(o);
         rs.from = core::View::home(loc.fractal.julia());
         rs.to = loc.view;
         if (cli.isSet(loop)) {
