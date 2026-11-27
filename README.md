@@ -15,8 +15,15 @@ movies are Windows only there (WebP, GIF and PNG frames work).
 
 ## First run
 
-The app asks where to keep its settings (theme, colors, saved places, the last view). The suggested folder is
+<img src="docs/dialog-language.png" alt="The first start's question, in English and Spanish: which language the app should use" width="420" align="right">
+
+The app first asks which language to use: **English** or **Español** (Spanish). The answer is kept with the other
+settings; change it later in **File ▸ Settings ▸ Language** (the app offers to restart in the new language).
+
+Then it asks where to keep its settings (theme, colors, saved places, the last view). The suggested folder is
 fine. Then scroll to zoom.
+
+<br clear="right">
 
 ## Exploring
 
@@ -121,7 +128,7 @@ drawn in pieces, so memory is never the limit.
 <summary><b>Menus</b></summary>
 
 - **File:** Open Location…, Save Location…, Save Picture…, Save to Gallery…, Copy Location, Paste Location, Settings
-  (Change App Data Folder…, Reset Settings to Defaults…), Quit
+  (Language: English or Español, the app restarts in it; Change App Data Folder…; Reset Settings to Defaults…), Quit
 - **Explore:** Back, Forward, Reset View, Zoom In, Zoom Out, Turn Left, Turn Right, Straighten, Add to Places…,
   Randomize Everything, Randomize Colors, Autopilot, Pause Animation, Autopilot Speed, Record Zoom…
 - **Edit:** Undo, Redo, Reset Colors to Defaults, Reset Everything to Defaults, Edit Palette…, Delete This Palette
@@ -142,6 +149,7 @@ mandelbrotSet.exe --record location.json --out zoom.mp4 [--size 1920x1080] [--se
                   [--full-quality]                      every frame computed on its own (slower)
 mandelbrotSet.exe --screenshot window.png               a picture of the window (no dialogs; for checks)
 mandelbrotSet.exe --data-folder FOLDER                  keep settings in FOLDER for this run
+mandelbrotSet.exe --language es                         Spanish (es) or English (en) for this run only
 ```
 
 Exit codes: 0 done, 2 bad arguments or file, 3 no OpenGL 4.3, 4 rendering failed, 5 couldn't save.
@@ -216,7 +224,10 @@ Every merge into the default branch publishes a release with the next version nu
 - `src/render`: the OpenGL 4.3 engine (`shaders/iterate.comp` computes, `colorize.frag` colors,
   `display.frag` draws) and `RenderCore`, which decides what to render and when.
 - `src/app`: the window, the picture widget with its mouse handling and autopilot, the Record Zoom dialog and the
-  movie writers.
+  movie writers, and the language choice (`Language`).
+- `src/app/i18n`: the translations. `es.json` holds every English text the app shows with its Spanish. Text in the
+  code goes through `T("…")` (`src/core/Tr.h`); names kept in files (palettes, places, themes) stay English there
+  and show translated. Text without an entry shows in English.
 - `legacy/`: the original Python scripts and one of their 2000 × 2000 renders.
 
 </details>

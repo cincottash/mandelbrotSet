@@ -1,6 +1,7 @@
 #include "Location.h"
 
 #include "Palette.h"
+#include "Tr.h"
 
 #include <QBuffer>
 #include <QFile>
@@ -36,11 +37,11 @@ QJsonObject Location::toJson(bool withThumbnail) const
 bool Location::fromJson(const QJsonObject& o, QString* error)
 {
     if (o.value(QStringLiteral("format")).toString() != kFormat) {
-        if (error) *error = QStringLiteral("This isn't a location file.");
+        if (error) *error = T("This isn't a location file.");
         return false;
     }
     if (o.value(QStringLiteral("version")).toInt(1) > kVersion) {
-        if (error) *error = QStringLiteral("This location was saved by a newer version of the app.");
+        if (error) *error = T("This location was saved by a newer version of the app.");
         return false;
     }
     Location l;
@@ -82,13 +83,13 @@ bool Location::load(const QString& path, QString* error)
         return false;
     }
     if (f.size() > 64 * 1024 * 1024) {
-        if (error) *error = QStringLiteral("The file is too large to be a location.");
+        if (error) *error = T("The file is too large to be a location.");
         return false;
     }
     QJsonParseError pe;
     const QJsonDocument d = QJsonDocument::fromJson(f.readAll(), &pe);
     if (pe.error != QJsonParseError::NoError || !d.isObject()) {
-        if (error) *error = QStringLiteral("This isn't a location file (it isn't valid JSON).");
+        if (error) *error = T("This isn't a location file (it isn't valid JSON).");
         return false;
     }
     return fromJson(d.object(), error);

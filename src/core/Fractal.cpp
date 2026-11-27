@@ -1,4 +1,5 @@
 #include "Fractal.h"
+#include "Tr.h"
 
 #include <QJsonArray>
 #include <QJsonValue>
@@ -20,7 +21,7 @@ BigFloat FractalParams::seedY(long bits) const { return parsed(juliaIm, bits, 0.
 
 QStringList formulaNames()
 {
-    return {QStringLiteral("Classic"), QStringLiteral("Burning Ship"), QStringLiteral("Tricorn")};
+    return {T("Classic"), T("Burning Ship"), T("Tricorn")};   // only shown (files keep a key)
 }
 
 static const char* const kFormulaKeys[] = {"classic", "burning_ship", "tricorn"};
@@ -46,13 +47,27 @@ View FractalParams::home() const
 
 QString FractalParams::name() const
 {
-    QString kind = formula == Formula::BurningShip ? QStringLiteral("Burning Ship")
-                   : formula == Formula::Tricorn   ? QStringLiteral("Tricorn")
-                                                   : QStringLiteral("Mandelbrot set");
-    if (power != 2) kind = QStringLiteral("power %1 %2").arg(power).arg(kind);
-    if (!julia()) return QStringLiteral("the ") + kind;
+    // Whole phrases, so the article and the word order can follow the language
+    const bool p2 = power == 2;
+    QString kind;   // without an article, for the Julia set's "(...)"
+    QString with;   // with one, as in "Now the Burning Ship."
+    switch (formula) {
+    case Formula::BurningShip:
+        kind = p2 ? T("Burning Ship") : T("power %1 Burning Ship").arg(power);
+        with = p2 ? T("the Burning Ship") : T("the power %1 Burning Ship").arg(power);
+        break;
+    case Formula::Tricorn:
+        kind = p2 ? T("Tricorn") : T("power %1 Tricorn").arg(power);
+        with = p2 ? T("the Tricorn") : T("the power %1 Tricorn").arg(power);
+        break;
+    default:
+        kind = p2 ? T("Mandelbrot set") : T("power %1 Mandelbrot set").arg(power);
+        with = p2 ? T("the Mandelbrot set") : T("the power %1 Mandelbrot set").arg(power);
+        break;
+    }
+    if (!julia()) return with;
     const bool neg = juliaIm.startsWith(QLatin1Char('-'));
-    return QStringLiteral("the Julia set of %1 %2 %3i (%4)")
+    return T("the Julia set of %1 %2 %3i (%4)")
         .arg(juliaRe.left(10), neg ? QStringLiteral("−") : QStringLiteral("+"), neg ? juliaIm.mid(1, 9) : juliaIm.left(9), kind);
 }
 

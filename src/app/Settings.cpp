@@ -14,6 +14,7 @@ namespace {
 template <typename F>
 void fields(Settings& s, F&& f)
 {
+    f("language", s.language);
     f("theme", s.theme);
     f("folded_cards", s.foldedCards);
     f("cards_both_sides", s.cardsBothSides);

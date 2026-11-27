@@ -1,6 +1,7 @@
 #include "PaletteEditor.h"
 
 #include "Widgets.h"
+#include "core/Tr.h"
 
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -24,7 +25,7 @@ GradientBar::GradientBar(QWidget* parent) : QWidget(parent)
 {
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    setToolTip(QStringLiteral("Drag a stop to move it. Double-click the bar to add a stop; Delete removes the chosen one."));
+    setToolTip(T("Drag a stop to move it. Double-click the bar to add a stop; Delete removes the chosen one."));
 }
 
 void GradientBar::setPalette(const core::Palette& p)
@@ -165,14 +166,15 @@ void GradientBar::keyPressEvent(QKeyEvent* e)
 
 PaletteEditor::PaletteEditor(const core::Palette& start, QWidget* parent) : QDialog(parent)
 {
-    setWindowTitle(QStringLiteral("Edit Palette"));
+    setWindowTitle(T("Edit Palette"));
     core::Palette p = start;
     if (core::isCustomPalette(start.name)) {
         m_originalName = start.name;
     } else {
-        // A built-in palette is the start of a new one of the user's own.
-        QString name = start.name + QStringLiteral(" Custom");
-        for (int n = 2; core::hasPalette(name); ++n) name = QStringLiteral("%1 Custom %2").arg(start.name).arg(n);
+        // A built-in palette is the start of a new one of the user's own, named in the app's language.
+        const QString base = Tname(start.name);
+        QString name = T("%1 Custom", "palette").arg(base);
+        for (int n = 2; core::hasPalette(name); ++n) name = T("%1 Custom %2", "palette").arg(base).arg(n);
         p.name = name;
     }
     p.sortStops();
@@ -180,7 +182,7 @@ PaletteEditor::PaletteEditor(const core::Palette& start, QWidget* parent) : QDia
     auto* lay = new QVBoxLayout(this);
     lay->setSpacing(10);
     auto* top = new QGridLayout;
-    top->addWidget(new QLabel(QStringLiteral("Name")), 0, 0);
+    top->addWidget(new QLabel(T("Name")), 0, 0);
     m_name = new QLineEdit(p.name);
     m_name->setMaxLength(40);
     m_name->setProperty("testId", QStringLiteral("paletteName"));
@@ -191,12 +193,12 @@ PaletteEditor::PaletteEditor(const core::Palette& start, QWidget* parent) : QDia
     lay->addWidget(m_bar);
 
     auto* stopRow = new QHBoxLayout;
-    stopRow->addWidget(new QLabel(QStringLiteral("Stop Color")));
-    m_color = new ColorButton(QStringLiteral("Stop Color"));
+    stopRow->addWidget(new QLabel(T("Stop Color")));
+    m_color = new ColorButton(T("Stop Color"));
     m_color->setProperty("testId", QStringLiteral("stopColor"));
     stopRow->addWidget(m_color);
     stopRow->addSpacing(12);
-    stopRow->addWidget(new QLabel(QStringLiteral("Position")));
+    stopRow->addWidget(new QLabel(T("Position")));
     m_pos = new QDoubleSpinBox;
     m_pos->setRange(0, 100);
     m_pos->setDecimals(1);
@@ -208,13 +210,13 @@ PaletteEditor::PaletteEditor(const core::Palette& start, QWidget* parent) : QDia
     lay->addLayout(stopRow);
 
     auto* buttons = new QHBoxLayout;
-    auto* add = new QPushButton(QStringLiteral("Add Stop"));
-    m_remove = new QPushButton(QStringLiteral("Remove Stop"));
-    auto* spread = new QPushButton(QStringLiteral("Spread Evenly"));
-    auto* rev = new QPushButton(QStringLiteral("Reverse"));
-    add->setToolTip(QStringLiteral("A new stop halfway to the next one, in the color already there."));
-    spread->setToolTip(QStringLiteral("Spaces the stops evenly, keeping their order."));
-    rev->setToolTip(QStringLiteral("Runs the colors the other way."));
+    auto* add = new QPushButton(T("Add Stop"));
+    m_remove = new QPushButton(T("Remove Stop"));
+    auto* spread = new QPushButton(T("Spread Evenly"));
+    auto* rev = new QPushButton(T("Reverse"));
+    add->setToolTip(T("A new stop halfway to the next one, in the color already there."));
+    spread->setToolTip(T("Spaces the stops evenly, keeping their order."));
+    rev->setToolTip(T("Runs the colors the other way."));
     for (QPushButton* b : {add, m_remove, spread, rev}) buttons->addWidget(b);
     buttons->addStretch();
     lay->addLayout(buttons);
@@ -256,8 +258,8 @@ core::Palette PaletteEditor::result() const
 QString PaletteEditor::problem() const
 {
     const QString n = m_name->text().trimmed();
-    if (n.isEmpty()) return QStringLiteral("Give the palette a name to save it.");
-    if (core::isBuiltInPalette(n)) return QStringLiteral("\"%1\" is a built-in palette; choose another name.").arg(n);
+    if (n.isEmpty()) return T("Give the palette a name to save it.");
+    if (core::isBuiltInPalette(n)) return T("\"%1\" is a built-in palette; choose another name.").arg(n);
     return {};
 }
 
@@ -268,9 +270,9 @@ void PaletteEditor::refresh()
     const QString n = m_name->text().trimmed();
     if (!why.isEmpty()) m_hint->setText(why);
     else if (core::isCustomPalette(n) && n.compare(m_originalName, Qt::CaseInsensitive) != 0)
-        m_hint->setText(QStringLiteral("A palette of yours is already called \"%1\": saving replaces it.").arg(n));
-    else m_hint->setText(QStringLiteral("Changes show on the picture as you make them. Your palettes are listed "
-                                        "after the built-in ones."));
+        m_hint->setText(T("A palette of yours is already called \"%1\": saving replaces it.").arg(n));
+    else m_hint->setText(T("Changes show on the picture as you make them. Your palettes are listed "
+                           "after the built-in ones."));
     m_remove->setEnabled(m_bar->gradient().stops.size() > 2);
     syncStopControls();
     emit changed(result());

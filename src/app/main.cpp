@@ -1,5 +1,6 @@
 #include "AppData.h"
 #include "FractalView.h"
+#include "Language.h"
 #include "MainWindow.h"
 #include "Settings.h"
 #include "Themes.h"
@@ -18,6 +19,7 @@
 #include <QFileInfo>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
@@ -146,9 +148,14 @@ int main(int argc, char* argv[])
     QCommandLineOption fps(QStringLiteral("fps"), QStringLiteral("Frames per second for --record (default 30)."), QStringLiteral("N"), QStringLiteral("30"));
     QCommandLineOption loop(QStringLiteral("loop"), QStringLiteral("With --record: a seamless loop into the mini Mandelbrot nearest the location's center."));
     QCommandLineOption fullQuality(QStringLiteral("full-quality"), QStringLiteral("With --record: compute every frame on its own instead of taking frames from keyframes (several times slower)."));
-    cli.addOptions({dataFolder, screenshot, render, out, size, aa, record, seconds, fps, loop, fullQuality});
+    QCommandLineOption languageOpt(QStringLiteral("language"), QStringLiteral("Show the app in this language for this run only: en (English) or es (Spanish)."), QStringLiteral("CODE"));
+    cli.addOptions({dataFolder, screenshot, render, out, size, aa, record, seconds, fps, loop, fullQuality, languageOpt});
     cli.addPositionalArgument(QStringLiteral("location"), QStringLiteral("A location file to open."));
     cli.process(app);
+    if (cli.isSet(languageOpt) && !language::isKnown(cli.value(languageOpt))) {
+        say(QStringLiteral("Unknown language \"%1\": use en or es.").arg(cli.value(languageOpt)));
+        return 2;
+    }
 
     if (cli.isSet(render)) {
         if (!cli.isSet(out)) {
@@ -233,6 +240,7 @@ int main(int argc, char* argv[])
         // Throwaway settings, never the user's, and never a dialog: problems go to the command line.
         QTemporaryDir tmp;
         appdata::resolve(tmp.path(), nullptr);
+        language::install(cli.isSet(languageOpt) ? cli.value(languageOpt) : QStringLiteral("en"));   // never asked here
         Settings settings;
         themes::apply(themes::forChoice(settings.theme));
         MainWindow w(settings, false);
@@ -260,13 +268,36 @@ int main(int argc, char* argv[])
         return rc;
     }
 
+    // The language: the one kept in the settings file, or asked now. Asked before the welcome window (which asks
+    // where to keep the settings), so that one shows in the chosen language too.
+    Settings saved;
+    if (const QString known = appdata::knownSettingsFile(cli.value(dataFolder)); !known.isEmpty()) saved.load(known);
+    themes::apply(themes::forChoice(saved.theme));   // the question and the welcome window in the app's theme
+    QString lang = cli.value(languageOpt);
+    if (lang.isEmpty()) lang = saved.language;
+    const bool keepLanguage = !cli.isSet(languageOpt);
+    if (!language::isKnown(lang)) lang = language::ask(nullptr, language::systemDefault());
+    language::install(lang);
+
     const QString folder = appdata::resolve(cli.value(dataFolder), nullptr);
     if (folder.isEmpty()) return 0;   // the first-run window was cancelled
     Settings settings;
     settings.load(appdata::settingsFile());
+    if (keepLanguage && settings.language != lang) {   // kept in the app data folder at once
+        settings.language = lang;
+        settings.save(appdata::settingsFile());
+    }
     themes::apply(themes::forChoice(settings.theme));
-    MainWindow w(settings, true);
-    if (!cli.positionalArguments().isEmpty()) w.openLocationFile(cli.positionalArguments().first());
-    w.show();
-    return app.exec();
+    int rc = 0;
+    {   // the window ends here, before a restart (File > Settings > Language) starts the next copy
+        MainWindow w(settings, true);
+        if (!cli.positionalArguments().isEmpty()) w.openLocationFile(cli.positionalArguments().first());
+        w.show();
+        rc = app.exec();
+    }
+    if (!MainWindow::restartAfterQuit().program.isEmpty()) {
+        const auto& again = MainWindow::restartAfterQuit();
+        if (!QProcess::startDetached(again.program, again.args)) say(QStringLiteral(APP_TITLE " couldn't start again by itself: open it again."));
+    }
+    return rc;
 }

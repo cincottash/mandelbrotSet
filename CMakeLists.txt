@@ -102,6 +102,26 @@ qt_add_resources(app resources PREFIX "/" BASE resources FILES
     resources/check.svg resources/check_dark.svg resources/icon.svg
     resources/down_light.svg resources/down_dark.svg resources/up_light.svg resources/up_dark.svg)
 
+# Translations (File > Settings > Language): the app's own, and Qt's for its own windows and buttons (file dialogs,
+# Yes/No) where this Qt has them. Without Qt's file, those few show in English; the app's own text is unaffected.
+set(I18N_FILES src/app/i18n/es.json)
+foreach(lang IN ITEMS es)
+    find_file(QT_I18N_${lang} qtbase_${lang}.qm
+        PATHS "${QT6_INSTALL_PREFIX}/${QT6_INSTALL_TRANSLATIONS}" "${QT6_INSTALL_PREFIX}/translations"
+              "${QT6_INSTALL_PREFIX}/share/qt6/translations"
+        NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    if(QT_I18N_${lang})
+        configure_file("${QT_I18N_${lang}}" "${CMAKE_CURRENT_BINARY_DIR}/i18n/qtbase_${lang}.qm" COPYONLY)
+        list(APPEND I18N_BUILT "${CMAKE_CURRENT_BINARY_DIR}/i18n/qtbase_${lang}.qm")
+    else()
+        message(STATUS "Qt's own ${lang} translation (qtbase_${lang}.qm) not found: its dialogs stay in English")
+    endif()
+endforeach()
+qt_add_resources(app i18n PREFIX "/i18n" BASE src/app/i18n FILES ${I18N_FILES})
+if(I18N_BUILT)
+    qt_add_resources(app i18n_qt PREFIX "/i18n" BASE "${CMAKE_CURRENT_BINARY_DIR}/i18n" FILES ${I18N_BUILT})
+endif()
+
 if(WIN32)
     # Media Foundation: Windows' own H.264 encoder for MP4 zoom movies.
     target_link_libraries(app PRIVATE user32 dwmapi mfplat mfreadwrite mfuuid ole32)

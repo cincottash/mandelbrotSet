@@ -1,4 +1,5 @@
 #include "FractalView.h"
+#include "core/Tr.h"
 
 #include <QKeyEvent>
 #include <QLabel>
@@ -80,7 +81,7 @@ void FractalView::initializeGL()
     m_tried = true;
     QString err;
     if (!context() || !context()->isValid()) {
-        m_error = QStringLiteral("No OpenGL context could be created on this computer.");
+        m_error = T("No OpenGL context could be created on this computer.");
     } else if (m_gpu.init(&err) && m_previewGpu.init(&err)) {
         m_ok = true;
         m_core = std::make_unique<render::RenderCore>(m_gpu);
@@ -188,8 +189,8 @@ void FractalView::applyZoom(double u, double v, double factor)
         if (target < m_core->minimumScale()) {
             m_zoomPending = 0;
             emit zoomLimitReached(m_fractal.classic()
-                                      ? QStringLiteral("Power %1 can zoom to about 1e-24. Power 2 can zoom without limit.").arg(m_fractal.power)
-                                      : QStringLiteral("The %1 can zoom to about 1e-24. The classic formula at power 2 can zoom without limit.")
+                                      ? T("Power %1 can zoom to about 1e-24. Power 2 can zoom without limit.").arg(m_fractal.power)
+                                      : T("The %1 can zoom to about 1e-24. The classic formula at power 2 can zoom without limit.")
                                             .arg(core::formulaNames().value(int(m_fractal.formula))));
             return;
         }
@@ -378,7 +379,7 @@ QImage FractalView::renderMovieFrame(const core::View& v, int w, int h, int ss, 
         m_gpu.colorize(m_movieFrame, m_colors, timeSeconds, m_movieTarget);
         img = m_gpu.readTarget(m_movieTarget);
     } else if (error) {
-        *error = QStringLiteral("The frame couldn't be taken from its keyframe.");
+        *error = T("The frame couldn't be taken from its keyframe.");
     }
     doneCurrent();
     return img;
@@ -689,9 +690,10 @@ void FractalView::autopilotAdvance(double dt, qint64 now)
     const double factor = std::exp(rate * dt);
     if (factor > 1.0 && m_view.scale * core::FloatExp(1.0 / factor) < m_core->minimumScale()) {
         setAutopilot(false);
-        emit zoomLimitReached(QStringLiteral("The autopilot stopped at the deepest zoom %1 allows (about 1e-24).")
-                                  .arg(m_fractal.classic() ? QStringLiteral("power %1").arg(m_fractal.power)
-                                                           : QStringLiteral("the ") + core::formulaNames().value(int(m_fractal.formula))));
+        emit zoomLimitReached(m_fractal.classic()
+                                  ? T("The autopilot stopped at the deepest zoom power %1 allows (about 1e-24).").arg(m_fractal.power)
+                                  : T("The autopilot stopped at the deepest zoom the %1 allows (about 1e-24).")
+                                        .arg(core::formulaNames().value(int(m_fractal.formula))));
         return;
     }
     m_view.zoomAt(0, 0, factor);

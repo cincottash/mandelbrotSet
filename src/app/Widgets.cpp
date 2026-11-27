@@ -1,6 +1,8 @@
 #include "Widgets.h"
 
+#include "core/ColorParams.h"
 #include "core/Palette.h"
+#include "core/Tr.h"
 
 #include <QColorDialog>
 #include <QContextMenuEvent>
@@ -21,9 +23,12 @@ int numberBoxWidth(const QFontMetrics& fm) { return fm.horizontalAdvance(QString
 
 int labelColumnWidth(const QFontMetrics& fm)
 {
+    // The widest label of every card, in the app's language (Spanish labels run longer)
     int w = 0;
-    for (const char* t : {"Escape Radius", "Green Frequency", "Pattern Scale", "Second Color", "Light Height", "Iterations"})
-        w = std::max(w, fm.horizontalAdvance(QString::fromLatin1(t)));
+    for (const char* t : {"Escape Radius", "Second Color", "Iterations", "Fewest Steps", "Color Scale", "Trap Shape",
+                          "Edge Color", "Background", "Red Limit", "Green Limit", "Blue Limit", "Coloring"})
+        w = std::max(w, fm.horizontalAdvance(T(t)));
+    for (const core::SliderSpec& sp : core::sliderSpecs()) w = std::max(w, fm.horizontalAdvance(T(sp.label)));
     return w + 6;
 }
 
@@ -129,7 +134,7 @@ void SliderRow::setTestId(const QString& id)
 void SliderRow::showMenu(const QPoint& global)
 {
     QMenu menu;
-    QAction* reset = menu.addAction(QStringLiteral("Reset to Default (%1)").arg(m_box->textFromValue(m_def) + m_box->suffix()));
+    QAction* reset = menu.addAction(T("Reset to Default (%1)").arg(m_box->textFromValue(m_def) + m_box->suffix()));
     reset->setEnabled(std::fabs(m_value - m_def) > 1e-12);
     if (menu.exec(global) == reset) {
         setValue(m_def);
@@ -177,8 +182,8 @@ constexpr double kPadLeft = -2.1, kPadRight = 0.7, kPadHalfH = 1.25;
 SeedPad::SeedPad(QWidget* parent) : QWidget(parent)
 {
     setCursor(Qt::CrossCursor);
-    setToolTip(QStringLiteral("Drag the dot over the Mandelbrot set to choose the Julia set's seed. Seeds near the "
-                              "set's edge give the most intricate Julia sets."));
+    setToolTip(T("Drag the dot over the Mandelbrot set to choose the Julia set's seed. Seeds near the "
+                 "set's edge give the most intricate Julia sets."));
     setProperty("testId", QStringLiteral("seedPad"));
 }
 

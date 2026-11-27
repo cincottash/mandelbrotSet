@@ -8,6 +8,10 @@
 #include <QStringList>
 
 struct Settings {
+    // The app's language ("en", "es"): asked at the first start, changed in File > Settings > Language.
+    // Empty: not asked yet. Kept by Reset View Options and Reset Settings.
+    QString language;
+
     // View options (View > Reset View Options)
     QString theme = QStringLiteral("dark");
     QStringList foldedCards = {QStringLiteral("EDGES"), QStringLiteral("INTERIOR"), QStringLiteral("EFFECTS"),

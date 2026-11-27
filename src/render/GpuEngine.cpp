@@ -1,6 +1,7 @@
 #include "GpuEngine.h"
 
 #include "core/Bloom.h"
+#include "core/Tr.h"
 
 #include <QFile>
 #include <QOpenGLContext>
@@ -45,7 +46,7 @@ unsigned GpuEngine::compile(const QString& name, const QByteArray& source, unsig
         glGetShaderiv(s, GL_INFO_LOG_LENGTH, &logLen);
         QByteArray log(std::max(logLen, 1), '\0');
         glGetShaderInfoLog(s, logLen, nullptr, log.data());
-        if (error) *error = QStringLiteral("The shader %1 didn't compile: %2").arg(name, QString::fromUtf8(log).trimmed());
+        if (error) *error = T("The shader %1 didn't compile: %2").arg(name, QString::fromUtf8(log).trimmed());
         glDeleteShader(s);
         return 0;
     }
@@ -68,7 +69,7 @@ unsigned GpuEngine::link(std::initializer_list<unsigned> shaders, QString* error
         glGetProgramiv(p, GL_INFO_LOG_LENGTH, &logLen);
         QByteArray log(std::max(logLen, 1), '\0');
         glGetProgramInfoLog(p, logLen, nullptr, log.data());
-        if (error) *error = QStringLiteral("The shaders didn't link: %1").arg(QString::fromUtf8(log).trimmed());
+        if (error) *error = T("The shaders didn't link: %1").arg(QString::fromUtf8(log).trimmed());
         glDeleteProgram(p);
         return 0;
     }
@@ -80,14 +81,14 @@ bool GpuEngine::init(QString* error)
     if (m_ready) return true;
     QOpenGLContext* ctx = QOpenGLContext::currentContext();
     if (!ctx) {
-        if (error) *error = QStringLiteral("No OpenGL context is available.");
+        if (error) *error = T("No OpenGL context is available.");
         return false;
     }
     const QSurfaceFormat f = ctx->format();
     if (ctx->isOpenGLES() || f.version() < qMakePair(4, 3) || !initializeOpenGLFunctions()) {
         if (error)
-            *error = QStringLiteral("The graphics driver offers OpenGL %1.%2; the renderer needs OpenGL 4.3 or newer. "
-                                    "Updating the graphics driver usually fixes this.")
+            *error = T("The graphics driver offers OpenGL %1.%2; the renderer needs OpenGL 4.3 or newer. "
+                       "Updating the graphics driver usually fixes this.")
                          .arg(f.majorVersion()).arg(f.minorVersion());
         return false;
     }
@@ -100,7 +101,7 @@ bool GpuEngine::init(QString* error)
     const QByteArray bloomSrc = loadShader(QStringLiteral("bloom.frag"));
     const QByteArray sphereSrc = loadShader(QStringLiteral("sphere.frag"));
     if (iter.isEmpty() || vert.isEmpty() || color.isEmpty() || disp.isEmpty() || bloomSrc.isEmpty() || sphereSrc.isEmpty()) {
-        if (error) *error = QStringLiteral("The shader files are missing from the program.");
+        if (error) *error = T("The shader files are missing from the program.");
         return false;
     }
     QString err;
