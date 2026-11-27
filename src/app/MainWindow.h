@@ -1,4 +1,4 @@
-// The main window: option cards on the left, the picture on the right, menus, a header and a bottom bar.
+// The main window: option cards on both sides of the picture (or all on the left), menus, a header and a bottom bar.
 #pragma once
 
 #include "RecordDialog.h"
@@ -89,11 +89,21 @@ public:
     void finishPaletteEdit(bool save, const core::Palette& p);
     void deleteCustomPalette(const QString& name);
     QStringList paletteChoices() const;   // the palette list's entries, in order
-    // The Gallery: famous fractals in their own looks (the card, and Explore > Gallery).
+    // The Gallery: whole pictures (spot, fractal, colors and effects). The user's own come first, newest first,
+    // then the famous fractals in their own looks (the card, and Explore > Gallery).
     void showGalleryItem(int i);
     int galleryCount() const { return int(m_gallery.size()); }
     QImage galleryThumbnail(int i) const { return i >= 0 && i < m_gallery.size() ? m_gallery[i].thumbnail : QImage(); }
+    QString galleryName(int i) const { return i >= 0 && i < m_gallery.size() ? m_gallery[i].name : QString(); }
+    bool galleryItemIsMine(int i) const { return i >= 0 && i < m_gallery.size() && !m_gallery[i].builtIn; }
+    int myGalleryCount() const;
+    void saveToGalleryNamed(const QString& name);
+    void renameGalleryItem(int i, const QString& name);
+    void removeGalleryItem(int i);
     bool placeButtonsEnabled(bool* go, bool* rename, bool* remove) const;
+    // The cards in two columns (left and right of the picture) or all on the left.
+    void setCardsBothSides(bool on);
+    bool cardOnRight(const QString& name) const;
 
 protected:
     void closeEvent(QCloseEvent* e) override;
@@ -163,6 +173,12 @@ private:
     void goToPlace(int row);
     void updatePlaceButtons();
     void renderBuiltInThumbnails();
+    void loadGallery();
+    void saveGallery();
+    void refreshGallery();
+    void saveToGallery();
+    void rebuildGalleryMenu();
+    void arrangeCards();
 
     Settings& m_s;
     bool m_interactive;
@@ -178,6 +194,9 @@ private:
     QLabel* m_status = nullptr;
     QLabel* m_gpuMessage = nullptr;
     QVBoxLayout* m_leftCol = nullptr;
+    QVBoxLayout* m_rightCol = nullptr;
+    QWidget* m_rightScroll = nullptr;
+    QStringList m_cardOrder;            // every card, in its one-column order
     QHash<QString, Card> m_cards;
     QHash<QString, SliderRow*> m_rows;
 
@@ -229,7 +248,9 @@ private:
     QList<core::Location> m_placeList;   // built-in first, then the user's
     // GALLERY
     QListWidget* m_galleryList = nullptr;
-    QList<core::Location> m_gallery;
+    QList<core::Location> m_gallery;    // the user's (builtIn false) first, then the famous ones
+    QMenu* m_galleryMenu = nullptr;
+    QAction* m_bothSidesAct = nullptr;
     // ACTIVITY
     QPlainTextEdit* m_log = nullptr;
     // Bottom bar

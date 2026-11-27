@@ -297,6 +297,10 @@ ColorParams randomColors(QRandomGenerator& rnd, const ColorParams& base)
     c.sphereShade = uniform(rnd, 0.4, 0.8);
     c.sphereShine = uniform(rnd, 0.2, 0.8);
     c.sphereBackground = randomColor(rnd, 5, 30);
+    // The Buddhabrot's own coloring (only used there).
+    c.buddhaNebula = chance(rnd, 0.5) ? 1 : 0;
+    c.buddhaExposure = logUniform(rnd, 0.7, 2.5);
+    c.buddhaGamma = uniform(rnd, 0.35, 0.8);
     return c;
 }
 
