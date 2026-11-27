@@ -104,6 +104,15 @@ public:
     // The cards in two columns (left and right of the picture) or all on the left.
     void setCardsBothSides(bool on);
     bool cardOnRight(const QString& name) const;
+    // File > Settings > Language: kept at once; offers to restart in it (the window closes, main() starts the app again).
+    void chooseLanguage(const QString& code);
+    struct Restart { QString program; QStringList args; };
+    static Restart& restartAfterQuit();                 // empty unless a restart was asked for
+    // Tests: the answer to "Restart now?" and the restart itself, without a window or a new process.
+    static inline std::function<bool()> restartAnswer;
+    static inline std::function<bool(const QString&, const QStringList&)> startAgain;
+    // A palette's name as shown: the built-in ones in the app's language, the user's own as they named them.
+    static QString paletteShownName(const QString& name);
 
 protected:
     void closeEvent(QCloseEvent* e) override;

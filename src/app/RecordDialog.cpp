@@ -1,4 +1,5 @@
 #include "RecordDialog.h"
+#include "core/Tr.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -22,24 +23,24 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
                            QWidget* parent)
     : QDialog(parent), m_current(current)
 {
-    setWindowTitle(QStringLiteral("Record Zoom"));
+    setWindowTitle(T("Record Zoom"));
     auto* lay = new QVBoxLayout(this);
-    auto* intro = new QLabel(QStringLiteral("The movie zooms from the whole set into the picture on screen, so zoom to "
-                                            "where it should end before opening this. Choose a format and a size, press "
-                                            "Record… and pick where to save it; a progress bar shows the time left. "
-                                            "Every other setting is ready as it is."));
+    auto* intro = new QLabel(T("The movie zooms from the whole set into the picture on screen, so zoom to "
+                               "where it should end before opening this. Choose a format and a size, press "
+                               "Record… and pick where to save it; a progress bar shows the time left. "
+                               "Every other setting is ready as it is."));
     intro->setWordWrap(true);
     intro->setObjectName(QStringLiteral("muted"));
     lay->addWidget(intro);
     lay->addSpacing(4);
-    auto* pathTitle = new QLabel(QStringLiteral("WHAT TO RECORD"));
+    auto* pathTitle = new QLabel(T("WHAT TO RECORD"));
     pathTitle->setObjectName(QStringLiteral("cardTitle"));
     lay->addWidget(pathTitle);
-    m_zoomIn = new QRadioButton(QStringLiteral("Zoom In From the Whole Set to This View"));
-    m_zoomIn->setToolTip(QStringLiteral("Starts fully zoomed out and dives into the view on screen, which ends the movie."));
-    m_loop = new QRadioButton(QStringLiteral("Seamless Loop Into a Mini Mandelbrot"));
-    m_loop->setToolTip(QStringLiteral("Dives from the whole set into a tiny copy of it inside this view. The copy looks "
-                                      "like the start, so the movie can repeat forever."));
+    m_zoomIn = new QRadioButton(T("Zoom In From the Whole Set to This View"));
+    m_zoomIn->setToolTip(T("Starts fully zoomed out and dives into the view on screen, which ends the movie."));
+    m_loop = new QRadioButton(T("Seamless Loop Into a Mini Mandelbrot"));
+    m_loop->setToolTip(T("Dives from the whole set into a tiny copy of it inside this view. The copy looks "
+                         "like the start, so the movie can repeat forever."));
     m_loop->setProperty("testId", QStringLiteral("loop"));
     auto* group = new QButtonGroup(this);
     group->addButton(m_zoomIn);
@@ -57,7 +58,7 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
         m_loopInfo->setText(whyNoLoop);
     }
 
-    auto* formTitle = new QLabel(QStringLiteral("MOVIE"));
+    auto* formTitle = new QLabel(T("MOVIE"));
     formTitle->setObjectName(QStringLiteral("cardTitle"));
     lay->addSpacing(6);
     lay->addWidget(formTitle);
@@ -73,23 +74,23 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
             m_format->setItemData(i, 0, Qt::UserRole - 1);   // disabled entry
         }
     }
-    m_format->setToolTip(QStringLiteral("MP4 plays everywhere; animated WebP loops by itself in browsers and chats; "
-                                        "animated GIF loops anywhere, with 256 colors a frame; "
-                                        "PNG Frames saves every frame as a picture in a folder."));
-    form->addRow(QStringLiteral("Format"), m_format);
+    m_format->setToolTip(T("MP4 plays everywhere; animated WebP loops by itself in browsers and chats; "
+                           "animated GIF loops anywhere, with 256 colors a frame; "
+                           "PNG Frames saves every frame as a picture in a folder."));
+    form->addRow(T("Format"), m_format);
     m_size = new QComboBox;
     const QSize win(windowSize.width() & ~1, windowSize.height() & ~1);
-    m_size->addItem(QStringLiteral("Window Size (%1 × %2)").arg(win.width()).arg(win.height()), win);
-    m_size->addItem(QStringLiteral("Small (640 × 360)"), QSize(640, 360));
-    m_size->addItem(QStringLiteral("Medium (960 × 540)"), QSize(960, 540));
+    m_size->addItem(T("Window Size (%1 × %2)").arg(win.width()).arg(win.height()), win);
+    m_size->addItem(T("Small (640 × 360)"), QSize(640, 360));
+    m_size->addItem(T("Medium (960 × 540)"), QSize(960, 540));
     m_size->addItem(QStringLiteral("720p (1280 × 720)"), QSize(1280, 720));
     m_size->addItem(QStringLiteral("1080p (1920 × 1080)"), QSize(1920, 1080));
     m_size->addItem(QStringLiteral("1440p (2560 × 1440)"), QSize(2560, 1440));
     m_size->addItem(QStringLiteral("4K (3840 × 2160)"), QSize(3840, 2160));
-    m_size->addItem(QStringLiteral("Square (1080 × 1080)"), QSize(1080, 1080));
-    m_size->addItem(QStringLiteral("Custom"), QSize());
+    m_size->addItem(T("Square (1080 × 1080)"), QSize(1080, 1080));
+    m_size->addItem(T("Custom", "size"), QSize());
     m_size->setCurrentIndex(m_size->findData(QSize(1920, 1080)));
-    form->addRow(QStringLiteral("Size"), m_size);
+    form->addRow(T("Size"), m_size);
     auto* wh = new QHBoxLayout;
     m_w = new QSpinBox;
     m_h = new QSpinBox;
@@ -102,18 +103,18 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     wh->addWidget(new QLabel(QStringLiteral("×")));
     wh->addWidget(m_h);
     wh->addStretch();
-    form->addRow(QStringLiteral("Width and Height"), wh);   // shown for a Custom size only
+    form->addRow(T("Width and Height"), wh);   // shown for a Custom size only
     auto* secRow = new QHBoxLayout;
     m_seconds = new QDoubleSpinBox;
     m_seconds->setRange(1, 600);
     m_seconds->setDecimals(1);
     m_seconds->setSuffix(QStringLiteral(" s"));
-    m_seconds->setToolTip(QStringLiteral("How long the movie plays. Longer zooms more slowly."));
+    m_seconds->setToolTip(T("How long the movie plays. Longer zooms more slowly."));
     const double doublings = std::max(1.0, m_current.log10Magnification() * 3.3219);
     m_seconds->setValue(std::clamp(std::round(doublings), 5.0, 120.0));   // about one doubling per second
     secRow->addWidget(m_seconds);
     secRow->addStretch();
-    form->addRow(QStringLiteral("Length"), secRow);
+    form->addRow(T("Length"), secRow);
     lay->addLayout(form);
 
     auto* more = new QToolButton;
@@ -127,29 +128,29 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     m_fps = new QComboBox;
     m_fps->addItems({QStringLiteral("24"), QStringLiteral("30"), QStringLiteral("60")});
     m_fps->setCurrentIndex(1);
-    m_fps->setToolTip(QStringLiteral("30 is smooth; 60 is smoother still and takes twice as long to render."));
+    m_fps->setToolTip(T("30 is smooth; 60 is smoother still and takes twice as long to render."));
     auto* fpsRow = new QHBoxLayout;
     fpsRow->addWidget(m_fps);
-    fpsRow->addWidget(new QLabel(QStringLiteral("Frames per Second")));
+    fpsRow->addWidget(new QLabel(T("Frames per Second")));
     fpsRow->addStretch();
-    moreForm->addRow(QStringLiteral("Frame Rate"), fpsRow);
+    moreForm->addRow(T("Frame Rate"), fpsRow);
     m_aa = new QComboBox;
-    m_aa->addItems({QStringLiteral("Off"), QStringLiteral("2 × 2"), QStringLiteral("3 × 3"), QStringLiteral("4 × 4")});
+    m_aa->addItems({T("Off"), QStringLiteral("2 × 2"), QStringLiteral("3 × 3"), QStringLiteral("4 × 4")});
     m_aa->setCurrentIndex(1);
-    m_aa->setToolTip(QStringLiteral("Samples per pixel: smoother edges and less shimmer between frames, for 4, 9 or 16 "
-                                    "times the work."));
-    moreForm->addRow(QStringLiteral("Anti-Aliasing"), m_aa);
-    m_fullQuality = new QCheckBox(QStringLiteral("Full Quality"));
+    m_aa->setToolTip(T("Samples per pixel: smoother edges and less shimmer between frames, for 4, 9 or 16 "
+                       "times the work."));
+    moreForm->addRow(T("Anti-Aliasing"), m_aa);
+    m_fullQuality = new QCheckBox(T("Full Quality"));
     m_fullQuality->setProperty("testId", QStringLiteral("fullQuality"));
-    m_fullQuality->setToolTip(QStringLiteral("Computes every frame on its own. Off, frames are taken from a sharper picture "
-                                             "made twice per halving of the view: several times faster, and only a little "
-                                             "softer in the finest detail."));
+    m_fullQuality->setToolTip(T("Computes every frame on its own. Off, frames are taken from a sharper picture "
+                                "made twice per halving of the view: several times faster, and only a little "
+                                "softer in the finest detail."));
     moreForm->addRow(QString(), m_fullQuality);
     lay->addWidget(moreBox);
     auto showMore = [this, more, moreBox](bool on) {
         moreBox->setVisible(on);
-        more->setText(on ? QStringLiteral("Fewer Options ▾") : QStringLiteral("More Options ▴"));
-        more->setToolTip(on ? QString() : QStringLiteral("Frame rate, anti-aliasing and Full Quality."));
+        more->setText(on ? T("Fewer Options ▾") : T("More Options ▴"));
+        more->setToolTip(on ? QString() : T("Frame rate, anti-aliasing and Full Quality."));
         adjustSize();
     };
     showMore(false);
@@ -160,7 +161,7 @@ RecordDialog::RecordDialog(const core::View& current, bool canLoop, const QStrin
     lay->addWidget(m_info);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     m_ok = buttons->button(QDialogButtonBox::Ok);
-    m_ok->setText(QStringLiteral("Record…"));
+    m_ok->setText(T("Record…"));
     lay->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -208,7 +209,7 @@ RecordDialog::~RecordDialog()
 void RecordDialog::startSearch()
 {
     m_searching = true;
-    m_loopInfo->setText(QStringLiteral("Looking for a mini Mandelbrot in this view…"));
+    m_loopInfo->setText(T("Looking for a mini Mandelbrot in this view…"));
     m_cancel = std::make_shared<std::atomic<bool>>(false);
     m_watcher = new QFutureWatcher<core::Minibrot>(this);
     connect(m_watcher, &QFutureWatcher<core::Minibrot>::finished, this, [this] {
@@ -216,16 +217,16 @@ void RecordDialog::startSearch()
         m_minibrot = m_watcher->result();
         if (m_minibrot.found) {
             const double doublings = -m_minibrot.size.log2Abs();
-            m_loopInfo->setText(QStringLiteral("Found one: period %1, about %2 across. The loop zooms %3 times in "
-                                               "(%4 halvings of the view).")
+            m_loopInfo->setText(T("Found one: period %1, about %2 across. The loop zooms %3 times in "
+                                  "(%4 halvings of the view).")
                                     .arg(QLocale().toString(m_minibrot.period))
                                     .arg(core::formatFloatExp(m_minibrot.size.abs(), 2))
                                     .arg(core::formatFloatExp(core::FloatExp(1.0) / m_minibrot.size.abs(), 2))
                                     .arg(QLocale().toString(doublings, 'f', 1)));
             m_seconds->setValue(std::clamp(std::round(doublings * 1.2), 5.0, 600.0));
         } else {
-            m_loopInfo->setText(QStringLiteral("No mini Mandelbrot in this view. Zoom closer to one (the small black "
-                                               "copies of the set) and open Record Zoom again."));
+            m_loopInfo->setText(T("No mini Mandelbrot in this view. Zoom closer to one (the small black "
+                                  "copies of the set) and open Record Zoom again."));
         }
         updateInfo();
     });
@@ -242,24 +243,24 @@ void RecordDialog::updateInfo()
     const double doublings = s.loop ? (m_minibrot.found ? -m_minibrot.size.log2Abs() : 0)
                                     : std::max(0.0, m_current.log10Magnification() * 3.3219);
     QStringList parts;
-    parts << QStringLiteral("%1 frames").arg(QLocale().toString(s.frames()));
+    parts << T("%1 frames").arg(QLocale().toString(s.frames()));
     if (doublings > 0)
-        parts << QStringLiteral("the view halves %1 times a second").arg(QLocale().toString(doublings / s.seconds, 'f', 2));
-    if (!s.keyframes) parts << QStringLiteral("full quality takes several times longer");
+        parts << T("the view halves %1 times a second").arg(QLocale().toString(doublings / s.seconds, 'f', 2));
+    if (!s.keyframes) parts << T("full quality takes several times longer");
     if (s.format == MovieWriter::Format::WebP && s.size.width() * s.size.height() > 1280 * 720)
-        parts << QStringLiteral("animated WebP files grow large above 720p");
+        parts << T("animated WebP files grow large above 720p");
     if (s.format == MovieWriter::Format::Mp4 && (s.size.width() > 4096 || s.size.height() > 2304))
-        parts << QStringLiteral("MP4 works up to 4096 × 2304");
+        parts << T("MP4 works up to 4096 × 2304");
     if (s.format == MovieWriter::Format::Gif) {
-        if (s.size.width() * s.size.height() > 960 * 540) parts << QStringLiteral("GIF files grow very large above 960 × 540");
-        if (s.fps > 50) parts << QStringLiteral("GIF plays at most 50 frames a second, so it keeps every other frame (%1 a second)").arg(s.fps / 2);
+        if (s.size.width() * s.size.height() > 960 * 540) parts << T("GIF files grow very large above 960 × 540");
+        if (s.fps > 50) parts << T("GIF plays at most 50 frames a second, so it keeps every other frame (%1 a second)").arg(s.fps / 2);
     }
     m_info->setText(parts.join(QStringLiteral(" · ")) + QStringLiteral("."));
     const bool mp4TooBig = s.format == MovieWriter::Format::Mp4 && (s.size.width() > 4096 || s.size.height() > 2304);
     m_ok->setEnabled(loopReady && !m_searching && !mp4TooBig);
-    m_ok->setToolTip(m_searching ? QStringLiteral("Still looking for a mini Mandelbrot.")
-                     : !loopReady ? QStringLiteral("The loop needs a mini Mandelbrot in the view.")
-                     : mp4TooBig ? QStringLiteral("MP4 works up to 4096 × 2304; choose a smaller size or PNG Frames.")
+    m_ok->setToolTip(m_searching ? T("Still looking for a mini Mandelbrot.")
+                     : !loopReady ? T("The loop needs a mini Mandelbrot in the view.")
+                     : mp4TooBig ? T("MP4 works up to 4096 × 2304; choose a smaller size or PNG Frames.")
                                  : QString());
 }
 

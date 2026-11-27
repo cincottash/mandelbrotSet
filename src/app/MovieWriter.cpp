@@ -1,6 +1,7 @@
 #include "MovieWriter.h"
 
 #include "GifEncoder.h"
+#include "core/Tr.h"
 
 #include <QDir>
 #include <QFile>
@@ -30,7 +31,7 @@ public:
     {
         const QString f = QDir(m_dir).filePath(QStringLiteral("frame-%1.png").arg(++m_n, 5, 10, QLatin1Char('0')));
         if (!frame.save(f)) {
-            if (error) *error = QStringLiteral("Couldn't write %1.").arg(QDir::toNativeSeparators(f));
+            if (error) *error = T("Couldn't write %1.").arg(QDir::toNativeSeparators(f));
             return false;
         }
         return true;
@@ -91,14 +92,14 @@ public:
         bool ok = f.open(QIODevice::WriteOnly)
             && f.write(reinterpret_cast<const char*>(data.bytes), qint64(data.size)) == qint64(data.size) && f.commit();
         WebPDataClear(&data);
-        if (!ok && error) *error = QStringLiteral("Couldn't write %1.").arg(QDir::toNativeSeparators(m_path));
+        if (!ok && error) *error = T("Couldn't write %1.").arg(QDir::toNativeSeparators(m_path));
         return ok;
     }
 
 private:
     bool fail(QString* error)
     {
-        if (error) *error = QStringLiteral("The WebP encoder stopped: %1").arg(QString::fromUtf8(m_enc ? WebPAnimEncoderGetError(m_enc) : "no encoder"));
+        if (error) *error = T("The WebP encoder stopped: %1").arg(QString::fromUtf8(m_enc ? WebPAnimEncoderGetError(m_enc) : "no encoder"));
         return false;
     }
     QString m_path;
@@ -116,7 +117,7 @@ public:
     bool open(int w, int h, int fps, QString* error)
     {
         if (!m_file.open(QIODevice::WriteOnly) || !m_enc.begin(&m_file, w, h, fps)) {
-            if (error) *error = QStringLiteral("Couldn't create %1.").arg(QDir::toNativeSeparators(m_file.fileName()));
+            if (error) *error = T("Couldn't create %1.").arg(QDir::toNativeSeparators(m_file.fileName()));
             return false;
         }
         return true;
@@ -124,13 +125,13 @@ public:
     bool add(const QImage& frame, QString* error) override
     {
         if (m_enc.add(frame)) return true;
-        if (error) *error = QStringLiteral("Couldn't write %1 (is the disk full?).").arg(QDir::toNativeSeparators(m_file.fileName()));
+        if (error) *error = T("Couldn't write %1 (is the disk full?).").arg(QDir::toNativeSeparators(m_file.fileName()));
         return false;
     }
     bool finish(QString* error) override
     {
         if (m_enc.finish() && m_file.commit()) return true;
-        if (error) *error = QStringLiteral("Couldn't write %1.").arg(QDir::toNativeSeparators(m_file.fileName()));
+        if (error) *error = T("Couldn't write %1.").arg(QDir::toNativeSeparators(m_file.fileName()));
         return false;
     }
 
@@ -142,8 +143,8 @@ private:
 // ---------------------------------------------------------------- MP4 (Windows Media Foundation)
 
 #ifdef Q_OS_WIN
-template <typename T>
-void release(T*& p)
+template <typename Com>
+void release(Com*& p)
 {
     if (p) {
         p->Release();
@@ -164,7 +165,7 @@ public:
     {
         const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         m_comStarted = SUCCEEDED(co);
-        if (FAILED(MFStartup(MF_VERSION))) return fail(error, QStringLiteral("Windows' video system couldn't start."));
+        if (FAILED(MFStartup(MF_VERSION))) return fail(error, T("Windows' video system couldn't start."));
         m_mfStarted = true;
         IMFAttributes* attr = nullptr;
         MFCreateAttributes(&attr, 2);
@@ -172,7 +173,7 @@ public:
         attr->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
         HRESULT hr = MFCreateSinkWriterFromURL(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(path).utf16()), nullptr, attr, &m_writer);
         release(attr);
-        if (FAILED(hr)) return fail(error, QStringLiteral("Couldn't create %1.").arg(QDir::toNativeSeparators(path)));
+        if (FAILED(hr)) return fail(error, T("Couldn't create %1.").arg(QDir::toNativeSeparators(path)));
         IMFMediaType* out = nullptr;
         MFCreateMediaType(&out);
         out->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -186,7 +187,7 @@ public:
         MFSetAttributeRatio(out, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
         hr = m_writer->AddStream(out, &m_stream);
         release(out);
-        if (FAILED(hr)) return fail(error, QStringLiteral("The H.264 encoder doesn't accept %1 × %2 at %3 frames per second.")
+        if (FAILED(hr)) return fail(error, T("The H.264 encoder doesn't accept %1 × %2 at %3 frames per second.")
                                                .arg(m_w).arg(m_h).arg(m_fps));
         IMFMediaType* in = nullptr;
         MFCreateMediaType(&in);
@@ -199,10 +200,10 @@ public:
         MFSetAttributeRatio(in, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
         hr = m_writer->SetInputMediaType(m_stream, in, nullptr);
         release(in);
-        if (FAILED(hr)) return fail(error, QStringLiteral("The H.264 encoder doesn't accept this picture size (%1 × %2). "
-                                                          "MP4 works up to 4096 × 2304; choose PNG Frames for larger.")
+        if (FAILED(hr)) return fail(error, T("The H.264 encoder doesn't accept this picture size (%1 × %2). "
+                                             "MP4 works up to 4096 × 2304; choose PNG Frames for larger.")
                                                .arg(m_w).arg(m_h));
-        if (FAILED(m_writer->BeginWriting())) return fail(error, QStringLiteral("The video couldn't be started."));
+        if (FAILED(m_writer->BeginWriting())) return fail(error, T("The video couldn't be started."));
         return true;
     }
     bool add(const QImage& frame, QString* error) override
@@ -210,7 +211,7 @@ public:
         const QImage img = frame.convertToFormat(QImage::Format_RGB32);
         const DWORD bytes = DWORD(m_w) * DWORD(m_h) * 4;
         IMFMediaBuffer* buf = nullptr;
-        if (FAILED(MFCreateMemoryBuffer(bytes, &buf))) return fail(error, QStringLiteral("Out of memory."));
+        if (FAILED(MFCreateMemoryBuffer(bytes, &buf))) return fail(error, T("Out of memory."));
         BYTE* data = nullptr;
         buf->Lock(&data, nullptr, nullptr);
         MFCopyImage(data, LONG(m_w * 4), img.constBits(), LONG(img.bytesPerLine()), DWORD(m_w * 4), DWORD(m_h));
@@ -226,7 +227,7 @@ public:
         release(s);
         release(buf);
         m_t += dur;
-        if (FAILED(hr)) return fail(error, QStringLiteral("The video encoder stopped (error 0x%1).").arg(quint32(hr), 8, 16, QLatin1Char('0')));
+        if (FAILED(hr)) return fail(error, T("The video encoder stopped (error 0x%1).").arg(quint32(hr), 8, 16, QLatin1Char('0')));
         return true;
     }
     bool finish(QString* error) override
@@ -234,7 +235,7 @@ public:
         if (!m_writer) return false;
         const HRESULT hr = m_writer->Finalize();
         release(m_writer);
-        if (FAILED(hr)) return fail(error, QStringLiteral("The video couldn't be finished."));
+        if (FAILED(hr)) return fail(error, T("The video couldn't be finished."));
         return true;
     }
 
@@ -256,7 +257,7 @@ private:
 
 QStringList MovieWriter::formatNames()
 {
-    return {QStringLiteral("MP4 Video"), QStringLiteral("Animated WebP"), QStringLiteral("PNG Frames"), QStringLiteral("Animated GIF")};
+    return {T("MP4 Video"), T("Animated WebP"), T("PNG Frames"), T("Animated GIF")};
 }
 
 QString MovieWriter::extension(Format f)
@@ -284,7 +285,7 @@ bool MovieWriter::available(Format f, QString* why)
     return true;
 #else
     if (f == Format::Mp4) {
-        if (why) *why = QStringLiteral("MP4 uses Windows' own video encoder. On Linux, choose Animated WebP or PNG Frames.");
+        if (why) *why = T("MP4 uses Windows' own video encoder. On Linux, choose Animated WebP or PNG Frames.");
         return false;
     }
     return true;
@@ -294,7 +295,7 @@ bool MovieWriter::available(Format f, QString* why)
 std::unique_ptr<MovieWriter> MovieWriter::create(Format f, const QString& path, int w, int h, int fps, QString* error)
 {
     if (w < 16 || h < 16 || fps < 1 || fps > 240) {
-        if (error) *error = QStringLiteral("The movie size or frame rate is out of range.");
+        if (error) *error = T("The movie size or frame rate is out of range.");
         return nullptr;
     }
     QString why;
@@ -305,26 +306,26 @@ std::unique_ptr<MovieWriter> MovieWriter::create(Format f, const QString& path, 
     switch (f) {
     case Format::PngFrames: {
         if (!QDir().mkpath(path)) {
-            if (error) *error = QStringLiteral("Couldn't create the folder %1.").arg(QDir::toNativeSeparators(path));
+            if (error) *error = T("Couldn't create the folder %1.").arg(QDir::toNativeSeparators(path));
             return nullptr;
         }
         return std::make_unique<PngFrames>(path);
     }
     case Format::WebP: {
         if (w > 16383 || h > 16383) {
-            if (error) *error = QStringLiteral("WebP pictures can be at most 16383 pixels on a side.");
+            if (error) *error = T("WebP pictures can be at most 16383 pixels on a side.");
             return nullptr;
         }
         auto wr = std::make_unique<WebPWriter>(path, w, h, fps);
         if (!wr->ok()) {
-            if (error) *error = QStringLiteral("The WebP encoder couldn't start.");
+            if (error) *error = T("The WebP encoder couldn't start.");
             return nullptr;
         }
         return wr;
     }
     case Format::Gif: {
         if (w > 65535 || h > 65535) {
-            if (error) *error = QStringLiteral("GIF pictures can be at most 65535 pixels on a side.");
+            if (error) *error = T("GIF pictures can be at most 65535 pixels on a side.");
             return nullptr;
         }
         auto wr = std::make_unique<GifWriter>(path);
@@ -334,7 +335,7 @@ std::unique_ptr<MovieWriter> MovieWriter::create(Format f, const QString& path, 
     case Format::Mp4: {
 #ifdef Q_OS_WIN
         if ((w % 2) || (h % 2)) {
-            if (error) *error = QStringLiteral("MP4 video needs an even width and height.");
+            if (error) *error = T("MP4 video needs an even width and height.");
             return nullptr;
         }
         auto wr = std::make_unique<Mp4Writer>(w, h, fps);

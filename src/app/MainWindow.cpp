@@ -3,8 +3,11 @@
 #include "AppData.h"
 #include "FileDialogs.h"
 #include "FractalView.h"
+#include "Language.h"
 #include "Themes.h"
 #include "Widgets.h"
+
+#include "core/Tr.h"
 
 #include "core/Minibrot.h"
 #include "core/Palette.h"
@@ -149,15 +152,15 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
     connect(m_view, &FractalView::pausedChanged, this, [this](bool on) {
         updateAnimationButtons();
         if (m_view->autopilot() || m_colors.cycleSpeed != 0.0)
-            log(on ? QStringLiteral("Paused. Resume (or Space on the picture) goes on from here.") : QStringLiteral("Resumed."));
+            log(on ? T("Paused. Resume (or Space on the picture) goes on from here.") : T("Resumed."));
     });
 
     connect(m_view, &FractalView::viewSettled, this, [this] { rememberView(); saveSettingsSoon(); });
     connect(m_view, &FractalView::contextMenuRequested, this, &MainWindow::showViewMenu);
     connect(m_view, &FractalView::gpuUnavailable, this, [this](const QString& why) {
-        m_gpuMessage->setText(QStringLiteral("The picture can't be drawn on this computer.\n\n%1").arg(why));
+        m_gpuMessage->setText(T("The picture can't be drawn on this computer.\n\n%1").arg(why));
         m_gpuMessage->show();
-        log(QStringLiteral("The graphics card renderer couldn't start: %1").arg(why));
+        log(T("The graphics card renderer couldn't start: %1").arg(why));
         updateStatus();
     });
     connect(m_view, &FractalView::autopilotChanged, this, [this](bool on) {
@@ -166,8 +169,8 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
             QSignalBlocker block(m_autoAct);
             m_autoAct->setChecked(on);
         }
-        log(on ? QStringLiteral("Autopilot on: zooming in, steering toward detail. Drag to steer, Escape to stop.")
-               : QStringLiteral("Autopilot off at zoom %1×.").arg(m_view->view().magnificationText()));
+        log(on ? T("Autopilot on: zooming in, steering toward detail. Drag to steer, Escape to stop.")
+               : T("Autopilot off at zoom %1×.").arg(m_view->view().magnificationText()));
         if (!on) rememberView();
         if (!m_statusTimer.isActive()) m_statusTimer.start();
     });
@@ -201,8 +204,8 @@ MainWindow::MainWindow(Settings& s, bool interactive, QWidget* parent)
         if (!m_statusTimer.isActive()) m_statusTimer.start();
     });
 
-    log(QStringLiteral("Ready. Scroll to zoom, drag to move, right-drag to turn, right-click for more."));
-    if (appdata::isTemporary()) log(QStringLiteral("Settings are not kept: this run uses a temporary folder."));
+    log(T("Ready. Scroll to zoom, drag to move, right-drag to turn, right-click for more."));
+    if (appdata::isTemporary()) log(T("Settings are not kept: this run uses a temporary folder."));
     rememberView();
     QTimer::singleShot(600, this, [this] { renderBuiltInThumbnails(); });
 }
@@ -218,17 +221,28 @@ MainWindow::~MainWindow()
 void MainWindow::buildMenus()
 {
     QMenuBar* bar = menuBar();
-    QMenu* file = bar->addMenu(QStringLiteral("&File"));
-    file->addAction(QStringLiteral("Open Location…"), QKeySequence::Open, this, &MainWindow::openLocation);
-    file->addAction(QStringLiteral("Save Location…"), QKeySequence::Save, this, &MainWindow::saveLocation);
-    file->addAction(QStringLiteral("Save Picture…"), QKeySequence(QStringLiteral("Ctrl+Shift+S")), this, &MainWindow::savePicture);
-    file->addAction(QStringLiteral("Save to Gallery…"), QKeySequence(QStringLiteral("Ctrl+G")), this, &MainWindow::saveToGallery);
+    QMenu* file = bar->addMenu(T("&File"));
+    file->addAction(T("Open Location…"), QKeySequence::Open, this, &MainWindow::openLocation);
+    file->addAction(T("Save Location…"), QKeySequence::Save, this, &MainWindow::saveLocation);
+    file->addAction(T("Save Picture…"), QKeySequence(QStringLiteral("Ctrl+Shift+S")), this, &MainWindow::savePicture);
+    file->addAction(T("Save to Gallery…"), QKeySequence(QStringLiteral("Ctrl+G")), this, &MainWindow::saveToGallery);
     file->addSeparator();
-    file->addAction(QStringLiteral("Copy Location"), QKeySequence(QStringLiteral("Ctrl+Shift+C")), this, &MainWindow::copyLocation);
-    file->addAction(QStringLiteral("Paste Location"), QKeySequence(QStringLiteral("Ctrl+Shift+V")), this, &MainWindow::pasteLocation);
+    file->addAction(T("Copy Location"), QKeySequence(QStringLiteral("Ctrl+Shift+C")), this, &MainWindow::copyLocation);
+    file->addAction(T("Paste Location"), QKeySequence(QStringLiteral("Ctrl+Shift+V")), this, &MainWindow::pasteLocation);
     file->addSeparator();
-    QMenu* settings = file->addMenu(QStringLiteral("Settings"));
-    settings->addAction(QStringLiteral("Change App Data Folder…"), this, [this] {
+    QMenu* settings = file->addMenu(T("Settings"));
+    // Each language's name in its own language, so it can be found whatever the app shows now
+    QMenu* languages = settings->addMenu(T("Language"));
+    auto* languageGroup = new QActionGroup(languages);
+    for (const language::Choice& c : language::available()) {
+        QAction* a = languages->addAction(c.name);
+        a->setCheckable(true);
+        a->setChecked(c.code == (m_s.language.isEmpty() ? language::current() : m_s.language));
+        a->setData(QStringLiteral("language:") + c.code);
+        languageGroup->addAction(a);
+        connect(a, &QAction::triggered, this, [this, code = c.code] { chooseLanguage(code); });
+    }
+    settings->addAction(T("Change App Data Folder…"), this, [this] {
         QString msg;
         if (appdata::change(this, &msg)) {
             log(msg);
@@ -240,11 +254,13 @@ void MainWindow::buildMenus()
             log(msg);
         }
     });
-    settings->addAction(QStringLiteral("Reset Settings to Defaults…"), this, [this] {
-        if (m_interactive && QMessageBox::question(this, QStringLiteral("Reset Settings"),
-                                                   QStringLiteral("Put every setting back to its default? Saved places are kept.")) != QMessageBox::Yes)
+    settings->addAction(T("Reset Settings to Defaults…"), this, [this] {
+        if (m_interactive && QMessageBox::question(this, T("Reset Settings"),
+                                                   T("Put every setting back to its default? Saved places and the language are kept.")) != QMessageBox::Yes)
             return;
+        const QString keepLanguage = m_s.language;
         m_s = Settings();
+        m_s.language = keepLanguage;
         m_fractal = core::FractalParams();
         m_colors = core::ColorParams();
         syncControls();
@@ -258,70 +274,70 @@ void MainWindow::buildMenus()
         arrangeCards();
         applyTheme();
         applyOpacity();
-        log(QStringLiteral("Settings are back to their defaults."));
+        log(T("Settings are back to their defaults."));
         saveSettingsSoon();
     });
     file->addSeparator();
-    file->addAction(QStringLiteral("Quit"), QKeySequence::Quit, this, &QWidget::close);
+    file->addAction(T("Quit"), QKeySequence::Quit, this, &QWidget::close);
 
-    QMenu* explore = bar->addMenu(QStringLiteral("&Explore"));
-    m_backAct = explore->addAction(QStringLiteral("Back"), QKeySequence(QStringLiteral("Alt+Left")), this, &MainWindow::back);
-    m_forwardAct = explore->addAction(QStringLiteral("Forward"), QKeySequence(QStringLiteral("Alt+Right")), this, &MainWindow::forward);
-    explore->addAction(QStringLiteral("Reset View"), QKeySequence(Qt::Key_Home), this, &MainWindow::resetView);
+    QMenu* explore = bar->addMenu(T("&Explore"));
+    m_backAct = explore->addAction(T("Back"), QKeySequence(QStringLiteral("Alt+Left")), this, &MainWindow::back);
+    m_forwardAct = explore->addAction(T("Forward"), QKeySequence(QStringLiteral("Alt+Right")), this, &MainWindow::forward);
+    explore->addAction(T("Reset View"), QKeySequence(Qt::Key_Home), this, &MainWindow::resetView);
     explore->addSeparator();
-    explore->addAction(QStringLiteral("Zoom In"), QKeySequence(QStringLiteral("Ctrl+=")), this, [this] { m_view->zoomAnimated(2.0); });
-    explore->addAction(QStringLiteral("Zoom Out"), QKeySequence(QStringLiteral("Ctrl+-")), this, [this] { m_view->zoomAnimated(0.5); });
-    explore->addAction(QStringLiteral("Turn Left"), QKeySequence(QStringLiteral("Ctrl+[")), this, [this] { m_view->rotateBy(-15); });
-    explore->addAction(QStringLiteral("Turn Right"), QKeySequence(QStringLiteral("Ctrl+]")), this, [this] { m_view->rotateBy(15); });
-    explore->addAction(QStringLiteral("Straighten"), this, [this] {
+    explore->addAction(T("Zoom In"), QKeySequence(QStringLiteral("Ctrl+=")), this, [this] { m_view->zoomAnimated(2.0); });
+    explore->addAction(T("Zoom Out"), QKeySequence(QStringLiteral("Ctrl+-")), this, [this] { m_view->zoomAnimated(0.5); });
+    explore->addAction(T("Turn Left"), QKeySequence(QStringLiteral("Ctrl+[")), this, [this] { m_view->rotateBy(-15); });
+    explore->addAction(T("Turn Right"), QKeySequence(QStringLiteral("Ctrl+]")), this, [this] { m_view->rotateBy(15); });
+    explore->addAction(T("Straighten"), this, [this] {
         core::View v = m_view->view();
         m_view->rotateBy(-v.angle * 180.0 / M_PI);
     });
     explore->addSeparator();
-    m_galleryMenu = explore->addMenu(QStringLiteral("Gallery"));   // filled by rebuildGalleryMenu()
-    explore->addAction(QStringLiteral("Add to Places…"), QKeySequence(QStringLiteral("Ctrl+D")), this, &MainWindow::addPlace);
-    explore->addAction(QStringLiteral("Randomize Everything"), QKeySequence(QStringLiteral("Ctrl+R")), this, &MainWindow::randomizeEverything);
-    explore->addAction(QStringLiteral("Randomize Colors"), QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, &MainWindow::randomizeColors);
+    m_galleryMenu = explore->addMenu(T("Gallery"));   // filled by rebuildGalleryMenu()
+    explore->addAction(T("Add to Places…"), QKeySequence(QStringLiteral("Ctrl+D")), this, &MainWindow::addPlace);
+    explore->addAction(T("Randomize Everything"), QKeySequence(QStringLiteral("Ctrl+R")), this, &MainWindow::randomizeEverything);
+    explore->addAction(T("Randomize Colors"), QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, &MainWindow::randomizeColors);
     explore->addSeparator();
-    m_autoAct = explore->addAction(QStringLiteral("Autopilot"));
+    m_autoAct = explore->addAction(T("Autopilot"));
     m_autoAct->setShortcut(QKeySequence(Qt::Key_P));
     m_autoAct->setCheckable(true);
-    m_autoAct->setToolTip(QStringLiteral("Zooms in on its own, forever, steering toward the richest detail."));
+    m_autoAct->setToolTip(T("Zooms in on its own, forever, steering toward the richest detail."));
     connect(m_autoAct, &QAction::triggered, this, [this](bool on) { setAutopilot(on); });
-    m_pauseAct = explore->addAction(QStringLiteral("Pause Animation"));
+    m_pauseAct = explore->addAction(T("Pause Animation"));
     m_pauseAct->setCheckable(true);
-    m_pauseAct->setToolTip(QStringLiteral("Stops the autopilot and color cycling where they are (Space on the picture)."));
+    m_pauseAct->setToolTip(T("Stops the autopilot and color cycling where they are (Space on the picture)."));
     connect(m_pauseAct, &QAction::triggered, this, [this](bool on) { setAnimationPaused(on); });
-    QMenu* apSpeed = explore->addMenu(QStringLiteral("Autopilot Speed"));
+    QMenu* apSpeed = explore->addMenu(T("Autopilot Speed"));
     auto* apGroup = new QActionGroup(this);
-    const QList<QPair<QString, double>> apSpeeds = {{QStringLiteral("Slow"), 1.25}, {QStringLiteral("Normal"), 2.0},
-                                                    {QStringLiteral("Fast"), 4.0}, {QStringLiteral("Very Fast"), 8.0}};
+    const QList<QPair<QString, double>> apSpeeds = {{T("Slow"), 1.25}, {T("Normal"), 2.0},
+                                                    {T("Fast"), 4.0}, {T("Very Fast"), 8.0}};
     for (const auto& [name, f] : apSpeeds) {
         QAction* a = apSpeed->addAction(name);
         a->setCheckable(true);
         a->setChecked(f == 2.0);
-        a->setToolTip(QStringLiteral("Zooms %1 times in every second.").arg(f));
+        a->setToolTip(T("Zooms %1 times in every second.").arg(QLocale().toString(f)));
         apGroup->addAction(a);
         connect(a, &QAction::triggered, this, [this, f = f] { m_view->setAutopilotSpeed(f); });
     }
-    explore->addAction(QStringLiteral("Record Zoom…"), QKeySequence(QStringLiteral("Ctrl+M")), this, &MainWindow::recordZoom);
+    explore->addAction(T("Record Zoom…"), QKeySequence(QStringLiteral("Ctrl+M")), this, &MainWindow::recordZoom);
     connect(explore, &QMenu::aboutToShow, this, [this] {
         m_backAct->setEnabled(m_historyPos > 0);
         m_forwardAct->setEnabled(m_historyPos >= 0 && m_historyPos < int(m_history.size()) - 1);
     });
 
-    QMenu* edit = bar->addMenu(QStringLiteral("&Edit"));
-    m_undoAct = edit->addAction(QStringLiteral("Undo"), QKeySequence::Undo, this, &MainWindow::undo);
-    m_redoAct = edit->addAction(QStringLiteral("Redo"), QKeySequence(QStringLiteral("Ctrl+Y")), this, &MainWindow::redo);
-    m_undoAct->setToolTip(QStringLiteral("Puts back the colors and formula as they were before the last change."));
+    QMenu* edit = bar->addMenu(T("&Edit"));
+    m_undoAct = edit->addAction(T("Undo"), QKeySequence::Undo, this, &MainWindow::undo);
+    m_redoAct = edit->addAction(T("Redo"), QKeySequence(QStringLiteral("Ctrl+Y")), this, &MainWindow::redo);
+    m_undoAct->setToolTip(T("Puts back the colors and formula as they were before the last change."));
     edit->addSeparator();
-    edit->addAction(QStringLiteral("Reset Colors to Defaults"), this, [this] {
+    edit->addAction(T("Reset Colors to Defaults"), this, [this] {
         finishEdit();
         setColors(core::ColorParams());
         finishEdit();
-        log(QStringLiteral("Colors are back to their defaults (the Seahorse Classic look). Undo brings yours back."));
+        log(T("Colors are back to their defaults (the Seahorse Classic look). Undo brings yours back."));
     });
-    edit->addAction(QStringLiteral("Reset Everything to Defaults"), this, [this] {
+    edit->addAction(T("Reset Everything to Defaults"), this, [this] {
         finishEdit();
         noteEdit();
         m_restoring = true;
@@ -334,41 +350,42 @@ void MainWindow::buildMenus()
         m_view->setView(core::View::home(false));
         rememberView();
         m_lastState = currentSettings();
-        log(QStringLiteral("Formula, colors and view are back to their defaults. Undo and Back bring yours back."));
+        log(T("Formula, colors and view are back to their defaults. Undo and Back bring yours back."));
         saveSettingsSoon();
     });
     edit->addSeparator();
-    edit->addAction(QStringLiteral("Edit Palette…"), this, &MainWindow::editPalette);
-    QAction* delPalette = edit->addAction(QStringLiteral("Delete This Palette"), this, [this] {
+    edit->addAction(T("Edit Palette…"), this, &MainWindow::editPalette);
+    QAction* delPalette = edit->addAction(T("Delete This Palette"), this, [this] {
         const QString name = m_colors.palette;
         if (m_interactive
-            && QMessageBox::question(this, QStringLiteral("Delete Palette"),
-                                     QStringLiteral("Delete the palette \"%1\"? Pictures that use it change to the "
-                                                    "Seahorse palette.").arg(name))
+            && QMessageBox::question(this, T("Delete Palette"),
+                                     T("Delete the palette \"%1\"? Pictures that use it change to the "
+                                       "Seahorse palette.").arg(name))
                    != QMessageBox::Yes)
             return;
         deleteCustomPalette(name);
     });
-    delPalette->setToolTip(QStringLiteral("Only palettes of your own can be deleted."));
+    delPalette->setToolTip(T("Only palettes of your own can be deleted."));
     connect(edit, &QMenu::aboutToShow, this, [this, delPalette] {
         m_undoAct->setEnabled(!m_undo.isEmpty());
         m_redoAct->setEnabled(!m_redo.isEmpty());
         delPalette->setEnabled(core::isCustomPalette(m_colors.palette));
     });
 
-    m_viewMenu = bar->addMenu(QStringLiteral("&View"));
-    QMenu* theme = m_viewMenu->addMenu(QStringLiteral("&Theme"));
+    m_viewMenu = bar->addMenu(T("&View"));
+    QMenu* theme = m_viewMenu->addMenu(T("&Theme"));
     m_themeGroup = new QActionGroup(this);
     m_themeGroup->setExclusive(true);
     for (const QString& g : themes::groups()) {
-        QMenu* sub = theme->addMenu(g);
+        QMenu* sub = theme->addMenu(Tname(g));
         QList<const themes::Theme*> list;
         for (const themes::Theme& t : themes::all())
             if (t.group == g) list << &t;
-        std::sort(list.begin(), list.end(), [](auto* a, auto* b) { return a->name.compare(b->name, Qt::CaseInsensitive) < 0; });
-        for (auto* t : list) addThemeAction(sub, t->name, t->key);
+        // In the order of the names shown (Spanish names sort differently)
+        std::sort(list.begin(), list.end(), [](auto* a, auto* b) { return Tname(a->name).compare(Tname(b->name), Qt::CaseInsensitive) < 0; });
+        for (auto* t : list) addThemeAction(sub, Tname(t->name), t->key);
     }
-    addThemeAction(theme, QStringLiteral("Match Operating System"), QStringLiteral("system"));
+    addThemeAction(theme, T("Match Operating System"), QStringLiteral("system"));
     connect(m_viewMenu, &QMenu::aboutToHide, this, [this] { endThemePreview(); });
     connect(theme, &QMenu::aboutToHide, this, [this] { endThemePreview(); });
     connect(theme, &QMenu::hovered, this, [this](QAction* a) {
@@ -377,12 +394,12 @@ void MainWindow::buildMenus()
     });
 
     // Window Opacity: one slider, applied to every part of the app.
-    QMenu* opacity = m_viewMenu->addMenu(QStringLiteral("Window Opacity"));
+    QMenu* opacity = m_viewMenu->addMenu(T("Window Opacity"));
     auto* row = new QWidget;
     row->setObjectName(QStringLiteral("menuRow"));
     auto* rl = new QHBoxLayout(row);
     rl->setContentsMargins(12, 6, 12, 6);
-    auto* ol = new QLabel(QStringLiteral("Opacity"));
+    auto* ol = new QLabel(T("Opacity"));
     auto* slider = new QSlider(Qt::Horizontal);
     slider->setRange(30, 100);
     slider->setValue(m_s.windowOpacity);
@@ -404,19 +421,19 @@ void MainWindow::buildMenus()
     });
     m_viewMenu->addSeparator();
 
-    m_juliaPreviewAct = m_viewMenu->addAction(QStringLiteral("Julia Preview"));
+    m_juliaPreviewAct = m_viewMenu->addAction(T("Julia Preview"));
     m_juliaPreviewAct->setShortcut(QKeySequence(Qt::Key_J));
     m_juliaPreviewAct->setCheckable(true);
     m_juliaPreviewAct->setChecked(m_s.juliaPreview);
-    m_juliaPreviewAct->setToolTip(QStringLiteral("Shows the Julia set of the point under the pointer in a corner of the picture."));
+    m_juliaPreviewAct->setToolTip(T("Shows the Julia set of the point under the pointer in a corner of the picture."));
     connect(m_juliaPreviewAct, &QAction::toggled, this, [this](bool on) {
         m_s.juliaPreview = on;
         m_view->setJuliaPreview(on);
         saveSettingsSoon();
     });
-    QMenu* aa = m_viewMenu->addMenu(QStringLiteral("Anti-Aliasing"));
+    QMenu* aa = m_viewMenu->addMenu(T("Anti-Aliasing"));
     m_aaGroup = new QActionGroup(this);
-    const QStringList aaNames = {QStringLiteral("Off"), QStringLiteral("2 × 2"), QStringLiteral("3 × 3"), QStringLiteral("4 × 4")};
+    const QStringList aaNames = {T("Off"),QStringLiteral("2 × 2"), QStringLiteral("3 × 3"), QStringLiteral("4 × 4")};
     for (int i = 1; i <= 4; ++i) {
         QAction* a = aa->addAction(aaNames[i - 1]);
         a->setCheckable(true);
@@ -429,10 +446,10 @@ void MainWindow::buildMenus()
             saveSettingsSoon();
         });
     }
-    QMenu* speed = m_viewMenu->addMenu(QStringLiteral("Zoom Speed"));
+    QMenu* speed = m_viewMenu->addMenu(T("Zoom Speed"));
     auto* speedGroup = new QActionGroup(this);
-    const QList<QPair<QString, int>> speeds = {{QStringLiteral("Gentle"), 50}, {QStringLiteral("Normal"), 100},
-                                               {QStringLiteral("Fast"), 200}, {QStringLiteral("Very Fast"), 350}};
+    const QList<QPair<QString, int>> speeds = {{T("Gentle"), 50}, {T("Normal"), 100},
+                                               {T("Fast"), 200}, {T("Very Fast"), 350}};
     for (const auto& [name, pctv] : speeds) {
         QAction* a = speed->addAction(name);
         a->setCheckable(true);
@@ -445,13 +462,13 @@ void MainWindow::buildMenus()
         });
     }
     m_viewMenu->addSeparator();
-    m_bothSidesAct = m_viewMenu->addAction(QStringLiteral("Cards on Both Sides"));
+    m_bothSidesAct = m_viewMenu->addAction(T("Cards on Both Sides"));
     m_bothSidesAct->setCheckable(true);
     m_bothSidesAct->setChecked(m_s.cardsBothSides);
-    m_bothSidesAct->setToolTip(QStringLiteral("Puts the Gallery, Places, Effects, Sphere and Activity cards right of the "
-                                              "picture, so less scrolling is needed. Off, every card is on the left."));
+    m_bothSidesAct->setToolTip(T("Puts the Gallery, Places, Effects, Sphere and Activity cards right of the "
+                                 "picture, so less scrolling is needed. Off, every card is on the left."));
     connect(m_bothSidesAct, &QAction::toggled, this, [this](bool on) { setCardsBothSides(on); });
-    m_onTopAct = m_viewMenu->addAction(QStringLiteral("Always on Top"));
+    m_onTopAct = m_viewMenu->addAction(T("Always on Top"));
     m_onTopAct->setCheckable(true);
     m_onTopAct->setChecked(m_s.alwaysOnTop);
     connect(m_onTopAct, &QAction::toggled, this, [this](bool on) {
@@ -461,12 +478,12 @@ void MainWindow::buildMenus()
         applyOpacity();
         saveSettingsSoon();
     });
-    QAction* full = m_viewMenu->addAction(QStringLiteral("Full Screen"));
+    QAction* full = m_viewMenu->addAction(T("Full Screen"));
     full->setShortcut(QKeySequence(Qt::Key_F11));
     full->setCheckable(true);
     connect(full, &QAction::toggled, this, [this](bool on) { on ? showFullScreen() : showNormal(); });
     m_viewMenu->addSeparator();
-    m_viewMenu->addAction(QStringLiteral("Reset View Options"), this, [this] {
+    m_viewMenu->addAction(T("Reset View Options"), this, [this] {
         m_s.resetView();
         applyTheme();
         for (QAction* a : m_themeGroup->actions()) a->setChecked(a->data().toString() == m_s.theme);
@@ -481,28 +498,28 @@ void MainWindow::buildMenus()
         saveSettingsSoon();
     });
 
-    QMenu* help = bar->addMenu(QStringLiteral("&Help"));
-    help->addAction(QStringLiteral("Mouse and Keys"), QKeySequence(Qt::Key_F1), this, [this] {
-        QMessageBox::information(this, QStringLiteral("Mouse and Keys"),
-            QStringLiteral("Scroll: zoom in or out at the pointer\nDrag: move\nRight-drag: turn\nDouble-click: zoom in 4×\n"
-                           "Right-click: zoom here, center here, the Julia set here, copy the point\n\n"
-                           "Arrow keys: move\n+ and -: zoom\nPage Up and Page Down: turn\nHome: reset the view\n"
-                           "Alt+Left and Alt+Right: back and forward\nJ: Julia preview\nP: autopilot\n"
-                           "Space: pause or resume the autopilot and color cycling\nEscape: stop the autopilot\n"
-                           "Ctrl+Z and Ctrl+Y: undo and redo a change of colors or formula\n"
-                           "Ctrl+R: randomize everything\nCtrl+Shift+R: randomize the colors and effects here\n"
-                           "Ctrl+G: save the picture to the Gallery\nF11: full screen"));
+    QMenu* help = bar->addMenu(T("&Help"));
+    help->addAction(T("Mouse and Keys"), QKeySequence(Qt::Key_F1), this, [this] {
+        QMessageBox::information(this, T("Mouse and Keys"),
+            T("Scroll: zoom in or out at the pointer\nDrag: move\nRight-drag: turn\nDouble-click: zoom in 4×\n"
+              "Right-click: zoom here, center here, the Julia set here, copy the point\n\n"
+              "Arrow keys: move\n+ and -: zoom\nPage Up and Page Down: turn\nHome: reset the view\n"
+              "Alt+Left and Alt+Right: back and forward\nJ: Julia preview\nP: autopilot\n"
+              "Space: pause or resume the autopilot and color cycling\nEscape: stop the autopilot\n"
+              "Ctrl+Z and Ctrl+Y: undo and redo a change of colors or formula\n"
+              "Ctrl+R: randomize everything\nCtrl+Shift+R: randomize the colors and effects here\n"
+              "Ctrl+G: save the picture to the Gallery\nF11: full screen"));
     });
-    help->addAction(QStringLiteral("Project Website"), this, [] { QDesktopServices::openUrl(QUrl(kWebsite)); });
-    help->addAction(QStringLiteral("Open App Data Folder"), this, [] {
+    help->addAction(T("Project Website"), this, [] { QDesktopServices::openUrl(QUrl(kWebsite)); });
+    help->addAction(T("Open App Data Folder"), this, [] {
         QDesktopServices::openUrl(QUrl::fromLocalFile(appdata::folder()));
     });
-    help->addAction(QStringLiteral("Report a Problem"), this, [] { QDesktopServices::openUrl(QUrl(kWebsite + QStringLiteral("/issues"))); });
-    help->addAction(QStringLiteral("About"), this, [this] {
-        QMessageBox::about(this, QStringLiteral("About " APP_TITLE),
-            QStringLiteral("<b>" APP_TITLE "</b> %1<br><br>Explore the Mandelbrot and Julia sets, zooming as deep as you like."
-                           "<br><br>Copyright (C) 2026 cincottash. Licensed under the GNU GPL, version 3."
-                           "<br><a href=\"%2\">%2</a>").arg(QStringLiteral(APP_VERSION), kWebsite));
+    help->addAction(T("Report a Problem"), this, [] { QDesktopServices::openUrl(QUrl(kWebsite + QStringLiteral("/issues"))); });
+    help->addAction(T("About"), this, [this] {
+        QMessageBox::about(this, T("About %1").arg(QStringLiteral(APP_TITLE)),
+            T("<b>%1</b> %2<br><br>Explore the Mandelbrot and Julia sets, zooming as deep as you like."
+              "<br><br>Copyright (C) 2026 cincottash. Licensed under the GNU GPL, version 3."
+              "<br><a href=\"%3\">%3</a>").arg(QStringLiteral(APP_TITLE), QStringLiteral(APP_VERSION), kWebsite));
     });
 }
 
@@ -601,7 +618,7 @@ QFrame* MainWindow::makeCard(const QString& title, QVBoxLayout** body)
     lay->setContentsMargins(14, 10, 14, 12);
     lay->setSpacing(8);
     auto* head = new QHBoxLayout;
-    auto* t = new QLabel(title);
+    auto* t = new QLabel(Tname(title));   // the title is the card's key (settings, tests); shown in the app's language
     t->setObjectName(QStringLiteral("cardTitle"));
     head->addWidget(t);
     head->addStretch();
@@ -609,14 +626,14 @@ QFrame* MainWindow::makeCard(const QString& title, QVBoxLayout** body)
                                            QStringLiteral("LIGHTING"), QStringLiteral("EDGES"), QStringLiteral("INTERIOR"),
                                            QStringLiteral("EFFECTS"), QStringLiteral("SPHERE")};
     if (resettable.contains(title)) {
-        auto* reset = linkButton(QStringLiteral("Reset"));
+        auto* reset = linkButton(T("Reset"));
         reset->setProperty("testId", QStringLiteral("reset ") + title);
-        reset->setToolTip(QStringLiteral("Puts this card's settings back to their defaults. Undo (Ctrl+Z) brings yours back."));
+        reset->setToolTip(T("Puts this card's settings back to their defaults. Undo (Ctrl+Z) brings yours back."));
         connect(reset, &QToolButton::clicked, this, [this, title] { resetCard(title); });
         head->addWidget(reset);
         head->addSpacing(10);
     }
-    auto* toggle = linkButton(QStringLiteral("Hide ▾"));
+    auto* toggle = linkButton(T("Hide ▾"));
     toggle->setProperty("testId", QStringLiteral("fold ") + title);
     head->addWidget(toggle);
     lay->addLayout(head);
@@ -640,7 +657,7 @@ void MainWindow::setCardOpen(const QString& name, bool open, bool save)
     if (!m_cards.contains(name)) return;
     const Card& c = m_cards[name];
     c.body->setVisible(open);
-    c.toggle->setText(open ? QStringLiteral("Hide ▾") : QStringLiteral("Show ▴"));
+    c.toggle->setText(open ? T("Hide ▾") : T("Show ▴"));
     c.frame->setSizePolicy(QSizePolicy::Preferred, open ? QSizePolicy::Preferred : QSizePolicy::Maximum);
     m_s.foldedCards.removeAll(name);
     if (!open) m_s.foldedCards << name;
@@ -719,8 +736,8 @@ QGridLayout* MainWindow::sliderGrid(const char* card, QVBoxLayout* into)
     int r = 0;
     for (const core::SliderSpec& sp : core::sliderSpecs()) {
         if (QLatin1String(sp.card) != QLatin1String(card)) continue;
-        auto* row = new SliderRow(QString::fromUtf8(sp.label), sp.min, sp.max, sp.def, sp.decimals, QString::fromUtf8(sp.unit),
-                                  sp.logScale, QString::fromUtf8(sp.tip), this);
+        auto* row = new SliderRow(T(sp.label), sp.min, sp.max, sp.def, sp.decimals, QString::fromUtf8(sp.unit),
+                                  sp.logScale, T(sp.tip), this);
         row->setTestId(QString::fromLatin1(sp.key));
         row->addTo(grid, r++);
         m_rows.insert(QString::fromLatin1(sp.key), row);
@@ -740,39 +757,39 @@ QWidget* MainWindow::buildFractalCard()
     QFrame* card = makeCard(QStringLiteral("FRACTAL"), &body);
     auto* grid = cardGrid();
     int r = 0;
-    grid->addWidget(new QLabel(QStringLiteral("Type")), r, 0);
+    grid->addWidget(new QLabel(T("Type")), r, 0);
     m_type = new QComboBox;
-    m_type->addItems({QStringLiteral("Mandelbrot Set"), QStringLiteral("Julia Set"), QStringLiteral("Buddhabrot")});
-    m_type->setItemData(2, QStringLiteral("The Mandelbrot set drawn by where its escaping orbits travel: a glowing, "
-                                          "ghostly figure (the Nebulabrot in three colors)."), Qt::ToolTipRole);
+    m_type->addItems({T("Mandelbrot Set"), T("Julia Set"), T("Buddhabrot")});
+    m_type->setItemData(2, T("The Mandelbrot set drawn by where its escaping orbits travel: a glowing, "
+                             "ghostly figure (the Nebulabrot in three colors)."), Qt::ToolTipRole);
     m_type->setProperty("testId", QStringLiteral("type"));
     grid->addWidget(m_type, r++, 1, 1, 2);
-    grid->addWidget(new QLabel(QStringLiteral("Formula")), r, 0);
+    grid->addWidget(new QLabel(T("Formula")), r, 0);
     m_formula = new QComboBox;
     m_formula->addItems(core::formulaNames());
     m_formula->setProperty("testId", QStringLiteral("formula"));
-    m_formula->setItemData(0, QStringLiteral("z^power + c: the Mandelbrot set itself."), Qt::ToolTipRole);
-    m_formula->setItemData(1, QStringLiteral("(|x| + i|y|)^2 + c: folds each step into one quarter of the plane. "
-                                             "Shows a burning ship, with fleets of smaller ships along its mast."), Qt::ToolTipRole);
-    m_formula->setItemData(2, QStringLiteral("conj(z)^power + c, the Mandelbar: three-cornered at power 2, more corners "
-                                             "above."), Qt::ToolTipRole);
-    m_formula->setToolTip(QStringLiteral("The rule that takes each point one step further. The Burning Ship and the Tricorn "
-                                         "zoom to about 1e-24."));
+    m_formula->setItemData(0, T("z^power + c: the Mandelbrot set itself."), Qt::ToolTipRole);
+    m_formula->setItemData(1, T("(|x| + i|y|)^2 + c: folds each step into one quarter of the plane. "
+                                "Shows a burning ship, with fleets of smaller ships along its mast."), Qt::ToolTipRole);
+    m_formula->setItemData(2, T("conj(z)^power + c, the Mandelbar: three-cornered at power 2, more corners "
+                                "above."), Qt::ToolTipRole);
+    m_formula->setToolTip(T("The rule that takes each point one step further. The Burning Ship and the Tricorn "
+                            "zoom to about 1e-24."));
     grid->addWidget(m_formula, r++, 1, 1, 2);
-    m_power = new SliderRow(QStringLiteral("Power"), 2, 8, 2, 0, QString(), false,
-                            QStringLiteral("The exponent in z^power + c. Power 2 is the classic set and zooms without limit; "
-                                           "higher powers zoom to about 1e-24. The Burning Ship is always power 2."), this);
+    m_power = new SliderRow(T("Power"), 2, 8, 2, 0, QString(), false,
+                            T("The exponent in z^power + c. Power 2 is the classic set and zooms without limit; "
+                              "higher powers zoom to about 1e-24. The Burning Ship is always power 2."), this);
     m_power->setTestId(QStringLiteral("power"));
     m_power->addTo(grid, r++);
-    m_escape = new SliderRow(QStringLiteral("Escape Radius"), 2, 100000, 256, 0, QString(), true,
-                             QStringLiteral("How far a point must travel before it counts as escaped. Small values show "
-                                            "the bands' edges; large values give the smoothest colors."), this);
+    m_escape = new SliderRow(T("Escape Radius"), 2, 100000, 256, 0, QString(), true,
+                             T("How far a point must travel before it counts as escaped. Small values show "
+                               "the bands' edges; large values give the smoothest colors."), this);
     m_escape->setTestId(QStringLiteral("escapeRadius"));
     m_escape->addTo(grid, r++);
-    grid->addWidget(new QLabel(QStringLiteral("Iterations")), r, 0);
+    grid->addWidget(new QLabel(T("Iterations")), r, 0);
     auto* iterRow = new QHBoxLayout;
-    m_autoIter = new QCheckBox(QStringLiteral("Auto"));
-    m_autoIter->setToolTip(QStringLiteral("Picks the limit from the zoom depth, and raises it when many pixels need more."));
+    m_autoIter = new QCheckBox(T("Auto", "automatic"));
+    m_autoIter->setToolTip(T("Picks the limit from the zoom depth, and raises it when many pixels need more."));
     m_autoIter->setProperty("testId", QStringLiteral("autoIterations"));
     m_iter = new QSpinBox;
     m_iter->setRange(core::FractalParams::kMinIterations, core::FractalParams::kMaxIterations);
@@ -792,7 +809,7 @@ QWidget* MainWindow::buildFractalCard()
     sl->addWidget(m_seedPad);
     auto* fields = new QGridLayout;
     fields->setVerticalSpacing(6);
-    auto* seedTitle = new QLabel(QStringLiteral("Julia Seed"));
+    auto* seedTitle = new QLabel(T("Julia Seed"));
     fields->addWidget(seedTitle, 0, 0, 1, 2);
     fields->addWidget(new QLabel(QStringLiteral("Re")), 1, 0);
     fields->addWidget(new QLabel(QStringLiteral("Im")), 2, 0);
@@ -800,14 +817,14 @@ QWidget* MainWindow::buildFractalCard()
     m_seedIm = new QLineEdit;
     m_seedRe->setProperty("testId", QStringLiteral("seedRe"));
     m_seedIm->setProperty("testId", QStringLiteral("seedIm"));
-    for (QLineEdit* e : {m_seedRe, m_seedIm}) e->setToolTip(QStringLiteral("Any number of digits; press Enter to use it."));
+    for (QLineEdit* e : {m_seedRe, m_seedIm}) e->setToolTip(T("Any number of digits; press Enter to use it."));
     fields->addWidget(m_seedRe, 1, 1);
     fields->addWidget(m_seedIm, 2, 1);
     fields->setRowStretch(3, 1);
     sl->addLayout(fields, 1);
     body->addWidget(m_seedBox);
-    m_juliaHint = new QLabel(QStringLiteral("Right-click the picture for the Julia set of any point, or press J for a "
-                                            "live Julia preview."));
+    m_juliaHint = new QLabel(T("Right-click the picture for the Julia set of any point, or press J for a "
+                               "live Julia preview."));
     m_juliaHint->setObjectName(QStringLiteral("muted"));
     m_juliaHint->setWordWrap(true);
     body->addWidget(m_juliaHint);
@@ -856,7 +873,7 @@ QWidget* MainWindow::buildFractalCard()
             core::BigFloat probe(64);
             const QString t = e->text().trimmed();
             if (!probe.parse(t.toStdString()) || std::fabs(probe.toDouble()) > 4) {
-                log(QStringLiteral("\"%1\" isn't a usable seed number (it must be a plain number between -4 and 4).").arg(t));
+                log(T("\"%1\" isn't a usable seed number (it must be a plain number between -4 and 4).").arg(t));
                 e->setText(*target);
                 return;
             }
@@ -877,21 +894,21 @@ QWidget* MainWindow::buildColorCard()
     QFrame* card = makeCard(QStringLiteral("COLOR"), &body);
     auto* grid = cardGrid();
     int r = 0;
-    grid->addWidget(new QLabel(QStringLiteral("Look")), r, 0);
+    grid->addWidget(new QLabel(T("Look")), r, 0);
     m_look = new QComboBox;
     m_look->setProperty("testId", QStringLiteral("look"));
-    m_look->setToolTip(QStringLiteral("Ready-made combinations of every color setting. Change anything to make it your own."));
-    for (const core::Look& l : core::looks()) m_look->addItem(l.name);
+    m_look->setToolTip(T("Ready-made combinations of every color setting. Change anything to make it your own."));
+    for (const core::Look& l : core::looks()) m_look->addItem(Tname(l.name));
     grid->addWidget(m_look, r++, 1);
-    grid->addWidget(new QLabel(QStringLiteral("Style")), r, 0);
+    grid->addWidget(new QLabel(T("Style")), r, 0);
     m_style = new QComboBox;
     m_style->addItems(core::styleNames());
     m_style->setProperty("testId", QStringLiteral("style"));
-    m_style->setToolTip(QStringLiteral("What the colors follow: the escape time (gradient, sine waves), the distance to the "
-                                       "set, stripes, the angle of escape, how close the orbit comes to a shape (orbit "
-                                       "trap), or the original Python renders' moiré fabric."));
+    m_style->setToolTip(T("What the colors follow: the escape time (gradient, sine waves), the distance to the "
+                          "set, stripes, the angle of escape, how close the orbit comes to a shape (orbit "
+                          "trap), or the original Python renders' moiré fabric."));
     grid->addWidget(m_style, r++, 1);
-    m_paletteLabel = new QLabel(QStringLiteral("Palette"));
+    m_paletteLabel = new QLabel(T("Palette"));
     grid->addWidget(m_paletteLabel, r, 0);
     m_palette = new QComboBox;
     m_palette->setProperty("testId", QStringLiteral("palette"));
@@ -901,33 +918,33 @@ QWidget* MainWindow::buildColorCard()
     auto* palRow = new QHBoxLayout;
     palRow->setSpacing(6);
     palRow->addWidget(m_palette, 1);
-    m_paletteEdit = linkButton(QStringLiteral("Edit…"));
+    m_paletteEdit = linkButton(T("Edit…"));
     m_paletteEdit->setProperty("testId", QStringLiteral("editPalette"));
-    m_paletteEdit->setToolTip(QStringLiteral("Change this palette's colors, or start a palette of your own from it."));
+    m_paletteEdit->setToolTip(T("Change this palette's colors, or start a palette of your own from it."));
     connect(m_paletteEdit, &QToolButton::clicked, this, &MainWindow::editPalette);
     palRow->addWidget(m_paletteEdit);
     grid->addLayout(palRow, r++, 1);
-    m_scaleLabel = new QLabel(QStringLiteral("Color Scale"));
+    m_scaleLabel = new QLabel(T("Color Scale"));
     grid->addWidget(m_scaleLabel, r, 0);
     m_scale = new QComboBox;
     m_scale->addItems(core::colorScaleNames());
     m_scale->setProperty("testId", QStringLiteral("colorScale"));
-    m_scale->setToolTip(QStringLiteral("How the escape time maps to colors. Linear keeps bands even at any depth; "
-                                       "Logarithmic spreads the first bands out when zoomed far out."));
+    m_scale->setToolTip(T("How the escape time maps to colors. Linear keeps bands even at any depth; "
+                          "Logarithmic spreads the first bands out when zoomed far out."));
     grid->addWidget(m_scale, r++, 1);
-    m_moireTintLabel = new QLabel(QStringLiteral("Tint"));
+    m_moireTintLabel = new QLabel(T("Tint"));
     grid->addWidget(m_moireTintLabel, r, 0);
-    m_moireTint = new ColorButton(QStringLiteral("Fabric Tint"));
+    m_moireTint = new ColorButton(T("Fabric Tint"));
     m_moireTint->setProperty("testId", QStringLiteral("moireTint"));
     grid->addWidget(m_moireTint, r++, 1, Qt::AlignLeft);
-    m_trapShapeLabel = new QLabel(QStringLiteral("Trap Shape"));
+    m_trapShapeLabel = new QLabel(T("Trap Shape"));
     grid->addWidget(m_trapShapeLabel, r, 0);
     m_trapShape = new QComboBox;
     m_trapShape->addItems(core::trapShapeNames());
     m_trapShape->setProperty("testId", QStringLiteral("trapShape"));
-    m_trapShape->setToolTip(QStringLiteral("Colors each point by how close its orbit comes to this shape: a point gives "
-                                           "glowing eyes, a cross gives thin stalks, a circle gives rings. Changing it "
-                                           "renders the view again."));
+    m_trapShape->setToolTip(T("Colors each point by how close its orbit comes to this shape: a point gives "
+                              "glowing eyes, a cross gives thin stalks, a circle gives rings. Changing it "
+                              "renders the view again."));
     grid->addWidget(m_trapShape, r++, 1);
     body->addLayout(grid);
     sliderGrid("COLOR", body);
@@ -942,7 +959,7 @@ QWidget* MainWindow::buildColorCard()
         m_colors = core::looks()[i].params;
         syncControls();
         colorsEdited();
-        log(QStringLiteral("Look: %1.").arg(core::looks()[i].name));
+        log(T("Look: %1.").arg(Tname(core::looks()[i].name)));
     });
     connect(m_style, &QComboBox::currentIndexChanged, this, [this](int i) {
         if (m_syncing) return;
@@ -952,7 +969,7 @@ QWidget* MainWindow::buildColorCard()
     });
     connect(m_palette, &QComboBox::currentIndexChanged, this, [this](int i) {
         if (m_syncing || i < 0) return;
-        m_colors.palette = m_palette->itemText(i);
+        m_colors.palette = m_palette->itemData(i).toString();   // the English name (the list shows it translated)
         colorsEdited();
     });
     connect(m_scale, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -984,12 +1001,12 @@ void MainWindow::buildUi()
     m_title->setObjectName(QStringLiteral("appTitle"));
     hl->addWidget(m_title);
     hl->addStretch();
-    m_notKept = linkButton(QStringLiteral("Settings Not Kept"));
-    m_notKept->setToolTip(QStringLiteral("This run keeps no settings: they are deleted when the app closes. Click to choose a folder."));
+    m_notKept = linkButton(T("Settings Not Kept"));
+    m_notKept->setToolTip(T("This run keeps no settings: they are deleted when the app closes. Click to choose a folder."));
     m_notKept->setVisible(appdata::isTemporary());
-    connect(m_notKept, &QToolButton::clicked, this, [this] { trigger(QStringLiteral("Change App Data Folder…")); });
+    connect(m_notKept, &QToolButton::clicked, this, [this] { trigger(T("Change App Data Folder…")); });
     hl->addWidget(m_notKept);
-    m_pill = new QLabel(QStringLiteral("● Starting"));
+    m_pill = new QLabel(T("● Starting"));
     m_pill->setObjectName(QStringLiteral("pill"));
     m_pill->setProperty("tone", QStringLiteral("idle"));
     m_pill->setProperty("testId", QStringLiteral("pill"));
@@ -1026,12 +1043,12 @@ void MainWindow::buildUi()
         m_leftCol->addWidget(makeCard(QStringLiteral("BUDDHABROT"), &b));
         auto* g = cardGrid();
         int r = 0;
-        g->addWidget(new QLabel(QStringLiteral("Coloring")), r, 0);
+        g->addWidget(new QLabel(T("Coloring")), r, 0);
         m_buddhaColoring = new QComboBox;
-        m_buddhaColoring->addItems({QStringLiteral("Palette"), QStringLiteral("Nebulabrot")});
+        m_buddhaColoring->addItems({T("Palette"), T("Nebulabrot")});
         m_buddhaColoring->setProperty("testId", QStringLiteral("buddhaColoring"));
-        m_buddhaColoring->setToolTip(QStringLiteral("Nebulabrot: red, green and blue each count the orbits that escape "
-                                                    "within their own limit. Palette: all the counts through the palette."));
+        m_buddhaColoring->setToolTip(T("Nebulabrot: red, green and blue each count the orbits that escape "
+                                       "within their own limit. Palette: all the counts through the palette."));
         g->addWidget(m_buddhaColoring, r++, 1, 1, 2);
         auto limitRow = [&](const QString& label, const QString& id, double def, const QString& tip) {
             auto* row = new SliderRow(label, 10, 100000, def, 0, QString(), true, tip, this);
@@ -1039,22 +1056,22 @@ void MainWindow::buildUi()
             row->addTo(g, r++);
             return row;
         };
-        m_buddhaRed = limitRow(QStringLiteral("Red Limit"), QStringLiteral("buddhaRed"), 5000,
-                               QStringLiteral("Orbits that escape within this many steps count in red (in Palette coloring, "
-                                              "in the brightest part). Changing it counts again."));
-        m_buddhaGreen = limitRow(QStringLiteral("Green Limit"), QStringLiteral("buddhaGreen"), 500,
-                                 QStringLiteral("The same for green. Changing it counts again."));
-        m_buddhaBlue = limitRow(QStringLiteral("Blue Limit"), QStringLiteral("buddhaBlue"), 50,
-                                QStringLiteral("The same for blue. Changing it counts again."));
-        m_buddhaMin = new SliderRow(QStringLiteral("Fewest Steps"), 0, 1000, 0, 0, QString(), false,
-                                    QStringLiteral("Orbits that escape sooner aren't counted: higher values leave only the "
-                                                   "long, ghostly paths. Changing it counts again."), this);
+        m_buddhaRed = limitRow(T("Red Limit"), QStringLiteral("buddhaRed"), 5000,
+                               T("Orbits that escape within this many steps count in red (in Palette coloring, "
+                                 "in the brightest part). Changing it counts again."));
+        m_buddhaGreen = limitRow(T("Green Limit"), QStringLiteral("buddhaGreen"), 500,
+                                 T("The same for green. Changing it counts again."));
+        m_buddhaBlue = limitRow(T("Blue Limit"), QStringLiteral("buddhaBlue"), 50,
+                                T("The same for blue. Changing it counts again."));
+        m_buddhaMin = new SliderRow(T("Fewest Steps"), 0, 1000, 0, 0, QString(), false,
+                                    T("Orbits that escape sooner aren't counted: higher values leave only the "
+                                      "long, ghostly paths. Changing it counts again."), this);
         m_buddhaMin->setTestId(QStringLiteral("buddhaMin"));
         m_buddhaMin->addTo(g, r++);
         b->addLayout(g);
         sliderGrid("BUDDHABROT", b);
-        auto* hint = new QLabel(QStringLiteral("The picture gets smoother the longer it counts. Zoom in only a little: "
-                                               "deep views get few orbits."));
+        auto* hint = new QLabel(T("The picture gets smoother the longer it counts. Zoom in only a little: "
+                                  "deep views get few orbits."));
         hint->setObjectName(QStringLiteral("muted"));
         hint->setWordWrap(true);
         b->addWidget(hint);
@@ -1090,8 +1107,8 @@ void MainWindow::buildUi()
         m_leftCol->addWidget(makeCard(QStringLiteral("EDGES"), &b));
         QGridLayout* g = sliderGrid("EDGES", b);
         const int r = g->rowCount();
-        g->addWidget(new QLabel(QStringLiteral("Edge Color")), r, 0);
-        m_edgeColor = new ColorButton(QStringLiteral("Edge Color"));
+        g->addWidget(new QLabel(T("Edge Color")), r, 0);
+        m_edgeColor = new ColorButton(T("Edge Color"));
         m_edgeColor->setProperty("testId", QStringLiteral("edgeColor"));
         g->addWidget(m_edgeColor, r, 1, 1, 2, Qt::AlignLeft);
         connect(m_edgeColor, &ColorButton::colorChanged, this, [this](const QColor& c) {
@@ -1103,20 +1120,20 @@ void MainWindow::buildUi()
         QVBoxLayout* b = nullptr;
         m_leftCol->addWidget(makeCard(QStringLiteral("INTERIOR"), &b));
         auto* g = cardGrid();
-        g->addWidget(new QLabel(QStringLiteral("Style")), 0, 0);
+        g->addWidget(new QLabel(T("Style")), 0, 0);
         m_interior = new QComboBox;
         m_interior->addItems(core::interiorStyleNames());
         m_interior->setProperty("testId", QStringLiteral("interiorStyle"));
-        m_interior->setToolTip(QStringLiteral("How the inside of the set is colored. Diagonal Gradient is the original "
-                                              "Python renders' look; Depth shades by how close the orbit came to zero."));
+        m_interior->setToolTip(T("How the inside of the set is colored. Diagonal Gradient is the original "
+                                 "Python renders' look; Depth shades by how close the orbit came to zero."));
         g->addWidget(m_interior, 0, 1);
-        g->addWidget(new QLabel(QStringLiteral("Color")), 1, 0);
-        m_in1 = new ColorButton(QStringLiteral("Inside Color"));
+        g->addWidget(new QLabel(T("Color")), 1, 0);
+        m_in1 = new ColorButton(T("Inside Color"));
         m_in1->setProperty("testId", QStringLiteral("interiorColor"));
         g->addWidget(m_in1, 1, 1, Qt::AlignLeft);
-        m_in2Label = new QLabel(QStringLiteral("Second Color"));
+        m_in2Label = new QLabel(T("Second Color"));
         g->addWidget(m_in2Label, 2, 0);
-        m_in2 = new ColorButton(QStringLiteral("Second Inside Color"));
+        m_in2 = new ColorButton(T("Second Inside Color"));
         m_in2->setProperty("testId", QStringLiteral("interiorColor2"));
         g->addWidget(m_in2, 2, 1, Qt::AlignLeft);
         b->addLayout(g);
@@ -1139,8 +1156,8 @@ void MainWindow::buildUi()
         m_leftCol->addWidget(makeCard(QStringLiteral("SPHERE"), &b));
         QGridLayout* g = sliderGrid("SPHERE", b);
         const int r = g->rowCount();
-        g->addWidget(new QLabel(QStringLiteral("Background")), r, 0);
-        m_sphereBg = new ColorButton(QStringLiteral("Background Behind the Ball"));
+        g->addWidget(new QLabel(T("Background")), r, 0);
+        m_sphereBg = new ColorButton(T("Background Behind the Ball"));
         m_sphereBg->setProperty("testId", QStringLiteral("sphereBackground"));
         g->addWidget(m_sphereBg, r, 1, 1, 2, Qt::AlignLeft);
         connect(m_sphereBg, &ColorButton::colorChanged, this, [this](const QColor& c) {
@@ -1152,8 +1169,8 @@ void MainWindow::buildUi()
         // GALLERY: whole pictures, each in its own look, one click away: the user's own, then famous fractals.
         QVBoxLayout* b = nullptr;
         m_leftCol->addWidget(makeCard(QStringLiteral("GALLERY"), &b));
-        auto* hint = new QLabel(QStringLiteral("Whole pictures: each brings its own colors and effects. Save yours here "
-                                               "with Save to Gallery."));
+        auto* hint = new QLabel(T("Whole pictures: each brings its own colors and effects. Save yours here "
+                                  "with Save to Gallery."));
         hint->setObjectName(QStringLiteral("muted"));
         hint->setWordWrap(true);
         b->addWidget(hint);
@@ -1165,17 +1182,18 @@ void MainWindow::buildUi()
         m_galleryList->setResizeMode(QListView::Adjust);
         m_galleryList->setWrapping(true);
         m_galleryList->setIconSize(QSize(144, 90));
-        m_galleryList->setGridSize(QSize(158, 122));
+        // Room for a name on two lines (Spanish names, and the user's own, run longer)
+        m_galleryList->setGridSize(QSize(158, 90 + 2 * m_galleryList->fontMetrics().lineSpacing() + 14));
         m_galleryList->setUniformItemSizes(true);
         m_galleryList->setWordWrap(true);
-        m_galleryList->setMinimumHeight(260);
+        m_galleryList->setMinimumHeight(2 * m_galleryList->gridSize().height() + 8);   // two whole rows
         m_galleryList->setContextMenuPolicy(Qt::CustomContextMenu);
         b->addWidget(m_galleryList);
         auto* row = new QHBoxLayout;
-        auto* saveBtn = new QPushButton(QStringLiteral("Save to Gallery…"));
+        auto* saveBtn = new QPushButton(T("Save to Gallery…"));
         saveBtn->setProperty("testId", QStringLiteral("saveToGallery"));
-        saveBtn->setToolTip(QStringLiteral("Keeps the picture on screen in the Gallery: the spot, the fractal, the colors "
-                                           "and the effects (Ctrl+G)."));
+        saveBtn->setToolTip(T("Keeps the picture on screen in the Gallery: the spot, the fractal, the colors "
+                              "and the effects (Ctrl+G)."));
         connect(saveBtn, &QPushButton::clicked, this, &MainWindow::saveToGallery);
         row->addWidget(saveBtn);
         row->addStretch();
@@ -1188,31 +1206,31 @@ void MainWindow::buildUi()
             if (it) {
                 const int i = m_galleryList->row(it);
                 m_galleryList->setCurrentItem(it);
-                menu.addAction(QStringLiteral("Show"), this, [this, i] { showGalleryItem(i); });
+                menu.addAction(T("Show", "verb"), this, [this, i] { showGalleryItem(i); });
                 if (galleryItemIsMine(i)) {
-                    menu.addAction(QStringLiteral("Rename…"), this, [this, i] {
+                    menu.addAction(T("Rename…"), this, [this, i] {
                         bool ok = false;
-                        const QString name = QInputDialog::getText(this, QStringLiteral("Rename Picture"), QStringLiteral("Name"),
+                        const QString name = QInputDialog::getText(this, T("Rename Picture"), T("Name"),
                                                                    QLineEdit::Normal, m_gallery[i].name, &ok).trimmed();
                         if (ok) renameGalleryItem(i, name);
                     });
-                    menu.addAction(QStringLiteral("Remove…"), this, [this, i] {
-                        if (QMessageBox::question(this, QStringLiteral("Remove Picture"),
-                                                  QStringLiteral("Remove \"%1\" from the Gallery?").arg(m_gallery[i].name))
+                    menu.addAction(T("Remove…"), this, [this, i] {
+                        if (QMessageBox::question(this, T("Remove Picture"),
+                                                  T("Remove \"%1\" from the Gallery?").arg(m_gallery[i].name))
                             == QMessageBox::Yes)
                             removeGalleryItem(i);
                     });
                 }
                 menu.addSeparator();
             }
-            menu.addAction(QStringLiteral("Save to Gallery…"), this, &MainWindow::saveToGallery);
+            menu.addAction(T("Save to Gallery…"), this, &MainWindow::saveToGallery);
             menu.exec(m_galleryList->viewport()->mapToGlobal(p));
         });
     }
     {
         QVBoxLayout* b = nullptr;
         m_leftCol->addWidget(makeCard(QStringLiteral("PLACES"), &b));
-        auto* hint = new QLabel(QStringLiteral("Spots to explore: each opens in the colors in use now."));
+        auto* hint = new QLabel(T("Spots to explore: each opens in the colors in use now."));
         hint->setObjectName(QStringLiteral("muted"));
         hint->setWordWrap(true);
         b->addWidget(hint);
@@ -1260,24 +1278,24 @@ void MainWindow::buildUi()
     bottom->setObjectName(QStringLiteral("bottomBar"));
     auto* bb = new QHBoxLayout(bottom);
     bb->setContentsMargins(16, 10, 16, 10);
-    auto* save = new QPushButton(QStringLiteral("Save Picture…"));
+    auto* save = new QPushButton(T("Save Picture…"));
     save->setProperty("testId", QStringLiteral("savePicture"));
     connect(save, &QPushButton::clicked, this, &MainWindow::savePicture);
-    auto* toGallery = new QPushButton(QStringLiteral("Save to Gallery…"));
+    auto* toGallery = new QPushButton(T("Save to Gallery…"));
     toGallery->setProperty("testId", QStringLiteral("saveToGalleryBar"));
-    toGallery->setToolTip(QStringLiteral("Keeps this picture in the Gallery, colors and effects included, to come back to "
-                                         "with one click (Ctrl+G)."));
+    toGallery->setToolTip(T("Keeps this picture in the Gallery, colors and effects included, to come back to "
+                            "with one click (Ctrl+G)."));
     connect(toGallery, &QPushButton::clicked, this, &MainWindow::saveToGallery);
-    auto* random = new QPushButton(QStringLiteral("Randomize"));
+    auto* random = new QPushButton(T("Randomize"));
     random->setProperty("testId", QStringLiteral("randomize"));
-    random->setToolTip(QStringLiteral("A random fractal, spot, zoom and colors, every time (Ctrl+R). Undo and Back "
-                                      "return to the ones before."));
+    random->setToolTip(T("A random fractal, spot, zoom and colors, every time (Ctrl+R). Undo and Back "
+                         "return to the ones before."));
     connect(random, &QPushButton::clicked, this, &MainWindow::randomizeEverything);
-    auto* randomColors = new QPushButton(QStringLiteral("Randomize Colors"));
+    auto* randomColors = new QPushButton(T("Randomize Colors"));
     randomColors->setProperty("testId", QStringLiteral("randomizeColors"));
-    randomColors->setToolTip(QStringLiteral("New random colors and effects for this same spot (Ctrl+Shift+R): the style, "
-                                            "palette, lighting, edges and inside, and sometimes bloom, a vignette, film "
-                                            "grain or a sphere. Undo brings the ones before back."));
+    randomColors->setToolTip(T("New random colors and effects for this same spot (Ctrl+Shift+R): the style, "
+                               "palette, lighting, edges and inside, and sometimes bloom, a vignette, film "
+                               "grain or a sphere. Undo brings the ones before back."));
     connect(randomColors, &QPushButton::clicked, this, &MainWindow::randomizeColors);
     bb->addWidget(save);
     bb->addWidget(toGallery);
@@ -1285,23 +1303,23 @@ void MainWindow::buildUi()
     bb->addWidget(random);
     bb->addWidget(randomColors);
     bb->addStretch();
-    m_backBtn = new QPushButton(QStringLiteral("◀ Back"));
+    m_backBtn = new QPushButton(T("◀ Back"));
     m_backBtn->setProperty("testId", QStringLiteral("back"));
-    m_backBtn->setToolTip(QStringLiteral("The previous view (Alt+Left)."));
-    m_forwardBtn = new QPushButton(QStringLiteral("Forward ▶"));
+    m_backBtn->setToolTip(T("The previous view (Alt+Left)."));
+    m_forwardBtn = new QPushButton(T("Forward ▶"));
     m_forwardBtn->setProperty("testId", QStringLiteral("forward"));
-    m_forwardBtn->setToolTip(QStringLiteral("The next view again, after going back (Alt+Right)."));
-    auto* reset = new QPushButton(QStringLiteral("Reset View"));
+    m_forwardBtn->setToolTip(T("The next view again, after going back (Alt+Right)."));
+    auto* reset = new QPushButton(T("Reset View"));
     reset->setProperty("testId", QStringLiteral("resetView"));
-    reset->setToolTip(QStringLiteral("Zoom all the way out (Home)."));
-    auto* record = new QPushButton(QStringLiteral("Record Zoom…"));
+    reset->setToolTip(T("Zoom all the way out (Home)."));
+    auto* record = new QPushButton(T("Record Zoom…"));
     record->setProperty("testId", QStringLiteral("recordZoom"));
-    record->setToolTip(QStringLiteral("Makes a movie of a zoom into this view, or a seamless loop (Ctrl+M)."));
-    m_autoBtn = new QPushButton(QStringLiteral("Autopilot ▶"));
+    record->setToolTip(T("Makes a movie of a zoom into this view, or a seamless loop (Ctrl+M)."));
+    m_autoBtn = new QPushButton(T("Autopilot ▶"));
     m_autoBtn->setObjectName(QStringLiteral("primary"));
     m_autoBtn->setProperty("testId", QStringLiteral("autopilot"));
-    m_autoBtn->setToolTip(QStringLiteral("Zooms in on its own, forever, steering toward the richest detail (P). "
-                                         "Drag to steer it; Escape stops it."));
+    m_autoBtn->setToolTip(T("Zooms in on its own, forever, steering toward the richest detail (P). "
+                            "Drag to steer it; Escape stops it."));
     connect(m_backBtn, &QPushButton::clicked, this, &MainWindow::back);
     connect(m_forwardBtn, &QPushButton::clicked, this, &MainWindow::forward);
     connect(reset, &QPushButton::clicked, this, &MainWindow::resetView);
@@ -1311,9 +1329,9 @@ void MainWindow::buildUi()
         if (!m_view->autopilot()) setAutopilot(true);
         else setAnimationPaused(!m_view->paused());
     });
-    m_stopBtn = new QPushButton(QStringLiteral("■ Stop"));
+    m_stopBtn = new QPushButton(T("■ Stop"));
     m_stopBtn->setProperty("testId", QStringLiteral("stop"));
-    m_stopBtn->setToolTip(QStringLiteral("Ends the autopilot here (Escape)."));
+    m_stopBtn->setToolTip(T("Ends the autopilot here (Escape)."));
     m_stopBtn->hide();
     connect(m_stopBtn, &QPushButton::clicked, this, [this] { setAutopilot(false); });
     bb->addWidget(m_backBtn);
@@ -1333,20 +1351,24 @@ void MainWindow::buildPlaces(QVBoxLayout* body)
     m_places = new QListWidget;
     m_places->setIconSize(QSize(80, 50));
     m_places->setMinimumHeight(190);
+    // A long name wraps beside its picture instead of running off the side (Spanish names are longer)
+    m_places->setWordWrap(true);
+    m_places->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_places->setResizeMode(QListView::Adjust);
     m_places->setProperty("testId", QStringLiteral("places"));
     m_places->setContextMenuPolicy(Qt::CustomContextMenu);
     row->addWidget(m_places, 1);
     auto* buttons = new QVBoxLayout;
-    m_goPlace = new QPushButton(QStringLiteral("Go To"));
-    auto* add = new QPushButton(QStringLiteral("Add…"));
-    m_renamePlace = new QPushButton(QStringLiteral("Rename…"));
-    m_removePlace = new QPushButton(QStringLiteral("Remove"));
+    m_goPlace = new QPushButton(T("Go To"));
+    auto* add = new QPushButton(T("Add…"));
+    m_renamePlace = new QPushButton(T("Rename…"));
+    m_removePlace = new QPushButton(T("Remove"));
     m_goPlace->setProperty("testId", QStringLiteral("goPlace"));
     add->setProperty("testId", QStringLiteral("addPlace"));
     m_renamePlace->setProperty("testId", QStringLiteral("renamePlace"));
     m_removePlace->setProperty("testId", QStringLiteral("removePlace"));
-    add->setToolTip(QStringLiteral("Saves this spot (the view and the fractal) as a place, to open later in whatever "
-                                   "colors are in use (Ctrl+D). Save to Gallery keeps the colors too."));
+    add->setToolTip(T("Saves this spot (the view and the fractal) as a place, to open later in whatever "
+                      "colors are in use (Ctrl+D). Save to Gallery keeps the colors too."));
     for (QPushButton* b : {m_goPlace, add, m_renamePlace, m_removePlace}) buttons->addWidget(b);
     buttons->addStretch();
     row->addLayout(buttons);
@@ -1362,9 +1384,9 @@ void MainWindow::buildPlaces(QVBoxLayout* body)
         if (!it) return;
         m_places->setCurrentItem(it);
         QMenu menu;
-        menu.addAction(QStringLiteral("Go To"), this, [this] { goToPlace(m_places->currentRow()); });
-        QAction* rn = menu.addAction(QStringLiteral("Rename…"), this, &MainWindow::renamePlace);
-        QAction* rm = menu.addAction(QStringLiteral("Remove"), this, &MainWindow::removePlace);
+        menu.addAction(T("Go To"), this, [this] { goToPlace(m_places->currentRow()); });
+        QAction* rn = menu.addAction(T("Rename…"), this, &MainWindow::renamePlace);
+        QAction* rm = menu.addAction(T("Remove"), this, &MainWindow::removePlace);
         rn->setEnabled(m_renamePlace->isEnabled());
         rm->setEnabled(m_removePlace->isEnabled());
         menu.exec(m_places->viewport()->mapToGlobal(p));
@@ -1394,7 +1416,7 @@ void MainWindow::syncControls()
     m_seedIm->setText(m_fractal.juliaIm);
     m_seedPad->setSeed(m_fractal.seedX(64).toDouble(), m_fractal.seedY(64).toDouble());
     m_style->setCurrentIndex(m_colors.style);
-    m_palette->setCurrentIndex(std::max(0, m_palette->findText(m_colors.palette)));
+    m_palette->setCurrentIndex(std::max(0, m_palette->findData(m_colors.palette)));
     m_scale->setCurrentIndex(m_colors.colorScale);
     m_moireTint->setColor(m_colors.moireTint);
     m_trapShape->setCurrentIndex(m_colors.trapShape);
@@ -1409,13 +1431,13 @@ void MainWindow::syncControls()
     int match = -1;
     for (int i = 0; i < core::looks().size(); ++i)
         if (core::looks()[i].params == m_colors) match = i;
-    const int custom = m_look->findText(QStringLiteral("Custom"));
+    const int custom = m_look->findText(T("Custom", "look"));
     if (match >= 0) {
         if (custom >= 0) m_look->removeItem(custom);
         m_look->setCurrentIndex(match);
     } else {
-        if (custom < 0) m_look->addItem(QStringLiteral("Custom"));
-        m_look->setCurrentIndex(m_look->findText(QStringLiteral("Custom")));
+        if (custom < 0) m_look->addItem(T("Custom", "look"));
+        m_look->setCurrentIndex(m_look->findText(T("Custom", "look")));
     }
     m_syncing = false;
     updateStyleVisibility();
@@ -1503,7 +1525,7 @@ void MainWindow::undo()
     m_editBurst.stop();
     m_redo.append(currentSettings());
     restoreSettings(m_undo.takeLast());
-    log(QStringLiteral("Undone."));
+    log(T("Undone."));
 }
 
 void MainWindow::redo()
@@ -1512,7 +1534,7 @@ void MainWindow::redo()
     m_editBurst.stop();
     m_undo.append(currentSettings());
     restoreSettings(m_redo.takeLast());
-    log(QStringLiteral("Redone."));
+    log(T("Redone."));
 }
 
 void MainWindow::resetCard(const QString& title)
@@ -1550,9 +1572,9 @@ void MainWindow::resetCard(const QString& title)
         colorsEdited();
     }
     finishEdit();
-    QString name = title.toLower();
+    QString name = Tname(title).toLower();
     name[0] = name[0].toUpper();
-    log(QStringLiteral("%1 settings are back to their defaults. Undo (Ctrl+Z) brings yours back.").arg(name));
+    log(T("%1 settings are back to their defaults. Undo (Ctrl+Z) brings yours back.").arg(name));
 }
 
 void MainWindow::setAnimationPaused(bool on)
@@ -1565,11 +1587,11 @@ void MainWindow::updateAnimationButtons()
 {
     const bool running = m_view->autopilot();
     const bool paused = m_view->paused();
-    m_autoBtn->setText(!running ? QStringLiteral("Autopilot ▶") : paused ? QStringLiteral("▶ Resume") : QStringLiteral("❚❚ Pause"));
-    m_autoBtn->setToolTip(!running ? QStringLiteral("Zooms in on its own, forever, steering toward the richest detail (P). "
-                                                    "Drag to steer it; Escape stops it.")
-                          : paused ? QStringLiteral("Goes on from here (Space on the picture).")
-                                   : QStringLiteral("Stops the zoom where it is, without ending the autopilot (Space on the picture)."));
+    m_autoBtn->setText(!running ? T("Autopilot ▶") : paused ? T("▶ Resume") : T("❚❚ Pause"));
+    m_autoBtn->setToolTip(!running ? T("Zooms in on its own, forever, steering toward the richest detail (P). "
+                                       "Drag to steer it; Escape stops it.")
+                          : paused ? T("Goes on from here (Space on the picture).")
+                                   : T("Stops the zoom where it is, without ending the autopilot (Space on the picture)."));
     m_stopBtn->setVisible(running);
     QSignalBlocker block(m_pauseAct);
     m_pauseAct->setChecked(paused);
@@ -1594,13 +1616,13 @@ void MainWindow::colorsEdited()
     for (int i = 0; i < core::looks().size(); ++i)
         if (core::looks()[i].params == m_colors) match = i;
     m_syncing = true;
-    const int custom = m_look->findText(QStringLiteral("Custom"));
+    const int custom = m_look->findText(T("Custom", "look"));
     if (match >= 0) {
         if (custom >= 0) m_look->removeItem(custom);
         m_look->setCurrentIndex(match);
     } else {
-        if (custom < 0) m_look->addItem(QStringLiteral("Custom"));
-        m_look->setCurrentIndex(m_look->findText(QStringLiteral("Custom")));
+        if (custom < 0) m_look->addItem(T("Custom", "look"));
+        m_look->setCurrentIndex(m_look->findText(T("Custom", "look")));
     }
     m_syncing = false;
     updateStyleVisibility();
@@ -1620,53 +1642,53 @@ void MainWindow::updateStatus()
 {
     const bool busy = m_view->busy();
     if (!m_view->gpuTried()) {
-        m_pill->setText(QStringLiteral("● Starting"));
+        m_pill->setText(T("● Starting"));
         setTone(m_pill, "idle");
     } else if (!m_view->gpuReady()) {
-        m_pill->setText(QStringLiteral("● Graphics Not Supported"));
+        m_pill->setText(T("● Graphics Not Supported"));
         setTone(m_pill, "err");
         m_gpuMessage->setGeometry(m_view->rect());
     } else {
         const render::CoreStatus s = m_view->coreStatus();
         QString gpu = m_view->gpuName();
         if (gpu != m_lastGpuLine) {
-            log(QStringLiteral("Drawing with %1.").arg(gpu));
+            log(T("Drawing with %1.").arg(gpu));
             m_lastGpuLine = gpu;
         }
         if (s.waiting || (s.referenceBusy && s.referenceTarget > 20000)) {
             const int pct = s.referenceTarget > 0 ? int(100.0 * s.referenceProgress / s.referenceTarget) : 0;
-            m_pill->setText(QStringLiteral("● Computing Reference %1 %").arg(std::clamp(pct, 0, 100)));
+            m_pill->setText(T("● Computing Reference %1 %").arg(std::clamp(pct, 0, 100)));
             setTone(m_pill, "warn");
         } else if (m_view->framesPerSecond() > 0.5 && busy) {
-            m_pill->setText(QStringLiteral("● %1 · %2 fps").arg(gpu).arg(int(std::lround(m_view->framesPerSecond()))));
+            m_pill->setText(T("● %1 · %2 fps").arg(gpu).arg(int(std::lround(m_view->framesPerSecond()))));
             setTone(m_pill, "ok");
         } else {
-            m_pill->setText(QStringLiteral("● %1 · Ready").arg(gpu));
+            m_pill->setText(T("● %1 · Ready").arg(gpu));
             setTone(m_pill, "ok");
         }
         const core::View& v = m_view->view();
         const int digits = std::clamp(int(std::floor(double(v.neededPrecision() - 70) * 0.30103)), 6, 18);
         const QString im = shortNumber(v.cy, digits);
-        const QString center = QStringLiteral("Center %1 %2 %3i").arg(shortNumber(v.cx, digits),
-                                                                      im.startsWith(QLatin1Char('-')) ? QStringLiteral("−") : QStringLiteral("+"),
-                                                                      im.startsWith(QLatin1Char('-')) ? im.mid(1) : im);
+        const QString center = T("Center %1 %2 %3i").arg(shortNumber(v.cx, digits),
+                                                         im.startsWith(QLatin1Char('-')) ? QStringLiteral("−") : QStringLiteral("+"),
+                                                         im.startsWith(QLatin1Char('-')) ? im.mid(1) : im);
         QStringList parts;
-        parts << center << QStringLiteral("Zoom %1×").arg(v.magnificationText())
-              << QStringLiteral("%1 Iterations").arg(QLocale().toString(s.maxIterations));
-        if (std::fabs(v.angle) > 1e-9) parts << QStringLiteral("Turned %1°").arg(QLocale().toString(v.angle * 180.0 / M_PI, 'f', 1));
-        parts << (s.wideRange ? QStringLiteral("Extended Precision") : QStringLiteral("Standard Precision"));
-        if (s.refining) parts << QStringLiteral("Refining %1 %").arg(int(s.progress * 100));
-        else if (s.lastPassMs > 0) parts << QStringLiteral("Rendered in %1 ms").arg(QLocale().toString(s.lastPassMs, 'f', 0));
+        parts << center << T("Zoom %1×").arg(v.magnificationText())
+              << T("%1 Iterations").arg(QLocale().toString(s.maxIterations));
+        if (std::fabs(v.angle) > 1e-9) parts << T("Turned %1°").arg(QLocale().toString(v.angle * 180.0 / M_PI, 'f', 1));
+        parts << (s.wideRange ? T("Extended Precision") : T("Standard Precision"));
+        if (s.refining) parts << T("Refining %1 %").arg(int(s.progress * 100));
+        else if (s.lastPassMs > 0) parts << T("Rendered in %1 ms").arg(QLocale().toString(s.lastPassMs, 'f', 0));
         m_status->setText(parts.join(QStringLiteral("  ·  ")));
-        m_status->setToolTip(QStringLiteral("Copy Location (Ctrl+Shift+C) copies the center with every digit."));
+        m_status->setToolTip(T("Copy Location (Ctrl+Shift+C) copies the center with every digit."));
         if (m_fractal.autoIterations && m_iter->value() != s.maxIterations) {
             m_syncing = true;
             m_iter->setValue(s.maxIterations);
             m_syncing = false;
         }
     }
-    m_iter->setToolTip(m_fractal.autoIterations ? QStringLiteral("Auto chooses this limit. Turn Auto off to set it yourself.")
-                                                : QStringLiteral("The most iterations a pixel may take before it counts as inside the set."));
+    m_iter->setToolTip(m_fractal.autoIterations ? T("Auto chooses this limit. Turn Auto off to set it yourself.")
+                                                : T("The most iterations a pixel may take before it counts as inside the set."));
     m_backBtn->setEnabled(m_historyPos > 0);
     m_forwardBtn->setEnabled(m_historyPos >= 0 && m_historyPos < int(m_history.size()) - 1);
     if (!busy && m_view->gpuTried()) m_statusTimer.stop();   // started again by the next change
@@ -1742,21 +1764,21 @@ void MainWindow::openLocationFile(const QString& path)
     core::Location l;
     QString err;
     if (!l.load(path, &err)) {
-        log(QStringLiteral("Couldn't open %1: %2").arg(QDir::toNativeSeparators(path), err));
+        log(T("Couldn't open %1: %2").arg(QDir::toNativeSeparators(path), err));
         if (m_interactive)
-            QMessageBox::warning(this, QStringLiteral("Couldn't Open Location"),
-                                 QStringLiteral("Couldn't open %1.\n\n%2").arg(QDir::toNativeSeparators(path), err));
+            QMessageBox::warning(this, T("Couldn't Open Location"),
+                                 T("Couldn't open %1.\n\n%2").arg(QDir::toNativeSeparators(path), err));
         return;
     }
     applyLocation(l);
     m_s.lastFolder = QFileInfo(path).absolutePath();
-    log(QStringLiteral("Opened %1 (zoom %2×).").arg(QDir::toNativeSeparators(path), l.view.magnificationText()));
+    log(T("Opened %1 (zoom %2×).").arg(QDir::toNativeSeparators(path), l.view.magnificationText()));
 }
 
 void MainWindow::openLocation()
 {
-    const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Open Location"), m_s.lastFolder,
-                                                   QStringLiteral("Locations (*.json);;All Files (*)"), nullptr,
+    const QString f = QFileDialog::getOpenFileName(this, T("Open Location"), m_s.lastFolder,
+                                                   T("Locations (*.json);;All Files (*)"), nullptr,
                                                    filedialogs::options());
     if (!f.isEmpty()) openLocationFile(f);
 }
@@ -1764,23 +1786,23 @@ void MainWindow::openLocation()
 void MainWindow::saveLocation()
 {
     const QString name = QStringLiteral("location-%1.json").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
-    const QString f = QFileDialog::getSaveFileName(this, QStringLiteral("Save Location"), QDir(m_s.lastFolder).filePath(name),
-                                                   QStringLiteral("Locations (*.json)"), nullptr, filedialogs::options());
+    const QString f = QFileDialog::getSaveFileName(this, T("Save Location"), QDir(m_s.lastFolder).filePath(name),
+                                                   T("Locations (*.json)"), nullptr, filedialogs::options());
     if (f.isEmpty()) return;
     QString err;
     if (!currentLocation().save(f, &err)) {
-        log(QStringLiteral("Couldn't save %1: %2").arg(QDir::toNativeSeparators(f), err));
-        QMessageBox::warning(this, QStringLiteral("Couldn't Save Location"), err);
+        log(T("Couldn't save %1: %2").arg(QDir::toNativeSeparators(f), err));
+        QMessageBox::warning(this, T("Couldn't Save Location"), err);
         return;
     }
     m_s.lastFolder = QFileInfo(f).absolutePath();
-    log(QStringLiteral("Saved the location to %1.").arg(QDir::toNativeSeparators(f)));
+    log(T("Saved the location to %1.").arg(QDir::toNativeSeparators(f)));
 }
 
 void MainWindow::copyLocation()
 {
     QApplication::clipboard()->setText(QString::fromUtf8(QJsonDocument(currentLocation().toJson()).toJson(QJsonDocument::Indented)));
-    log(QStringLiteral("Copied the location (paste it with Ctrl+Shift+V, or into a text file)."));
+    log(T("Copied the location (paste it with Ctrl+Shift+V, or into a text file)."));
 }
 
 void MainWindow::pasteLocation()
@@ -1789,10 +1811,10 @@ void MainWindow::pasteLocation()
     QJsonParseError pe;
     const QJsonDocument d = QJsonDocument::fromJson(text, &pe);
     core::Location l;
-    QString err = QStringLiteral("The clipboard doesn't hold a location.");
+    QString err = T("The clipboard doesn't hold a location.");
     if (d.isObject() && l.fromJson(d.object(), &err)) {
         applyLocation(l);
-        log(QStringLiteral("Pasted a location (zoom %1×).").arg(l.view.magnificationText()));
+        log(T("Pasted a location (zoom %1×).").arg(l.view.magnificationText()));
     } else {
         log(err);
     }
@@ -1851,7 +1873,7 @@ void MainWindow::switchFormula(core::Formula f)
         m_view->setView(m_fractal.home());
         rememberView();
     }
-    log(QStringLiteral("Now %1.").arg(m_fractal.name()));
+    log(T("Now %1.").arg(m_fractal.name()));
     saveSettingsSoon();
 }
 
@@ -1868,7 +1890,7 @@ void MainWindow::switchToJulia(const QString& re, const QString& im)
     finishEdit();
     m_view->setView(core::View::home(true));
     rememberView();
-    log(QStringLiteral("Julia set for c = %1 %2 %3i.").arg(re, im.startsWith(QLatin1Char('-')) ? QStringLiteral("−") : QStringLiteral("+"),
+    log(T("Julia set for c = %1 %2 %3i.").arg(re, im.startsWith(QLatin1Char('-')) ? QStringLiteral("−") : QStringLiteral("+"),
                                                             im.startsWith(QLatin1Char('-')) ? im.mid(1) : im));
     saveSettingsSoon();
 }
@@ -1898,7 +1920,7 @@ void MainWindow::switchToBuddhabrot()
     finishEdit();
     m_view->setView(m_fractal.home());
     rememberView();
-    log(QStringLiteral("Buddhabrot: the picture fills in as more orbits are counted."));
+    log(T("Buddhabrot: the picture fills in as more orbits are counted."));
     saveSettingsSoon();
 }
 
@@ -1908,25 +1930,25 @@ void MainWindow::showViewMenu(const QPoint& global, const QString& re, const QSt
     const double hh = std::max(1, m_view->height()) / 2.0;
     const double u = (p.x() - m_view->width() / 2.0) / hh, v = -(p.y() - hh) / hh;
     QMenu menu(this);
-    menu.addAction(QStringLiteral("Zoom In Here"), this, [this, u, v] { m_view->zoomAnimated(4.0, u, v); });
-    menu.addAction(QStringLiteral("Center Here"), this, [this, u, v] { m_view->panAnimated(u, v); });
+    menu.addAction(T("Zoom In Here"), this, [this, u, v] { m_view->zoomAnimated(4.0, u, v); });
+    menu.addAction(T("Center Here"), this, [this, u, v] { m_view->panAnimated(u, v); });
     menu.addSeparator();
     if (!m_fractal.julia()) {
-        menu.addAction(QStringLiteral("Julia Set Here"), this, [this, re, im] { switchToJulia(re, im); });
+        menu.addAction(T("Julia Set Here"), this, [this, re, im] { switchToJulia(re, im); });
     } else {
-        menu.addAction(QStringLiteral("Back to the Mandelbrot Set"), this, [this] {
+        menu.addAction(T("Back to the Mandelbrot Set"), this, [this] {
             m_syncing = true;
             m_type->setCurrentIndex(0);
             m_syncing = false;
             switchToMandelbrot();
         });
     }
-    menu.addAction(QStringLiteral("Copy Coordinates"), this, [this, re, im] {
+    menu.addAction(T("Copy Coordinates"), this, [this, re, im] {
         QApplication::clipboard()->setText(re + QStringLiteral(" ") + im);
-        log(QStringLiteral("Copied the point %1, %2.").arg(re.left(40), im.left(40)));
+        log(T("Copied the point %1, %2.").arg(re.left(40), im.left(40)));
     });
-    menu.addAction(QStringLiteral("Save to Gallery…"), this, &MainWindow::saveToGallery);
-    menu.addAction(QStringLiteral("Add to Places…"), this, &MainWindow::addPlace);
+    menu.addAction(T("Save to Gallery…"), this, &MainWindow::saveToGallery);
+    menu.addAction(T("Add to Places…"), this, &MainWindow::addPlace);
     menu.exec(global);
 }
 
@@ -1935,18 +1957,18 @@ void MainWindow::showViewMenu(const QPoint& global, const QString& re, const QSt
 void MainWindow::savePicture()
 {
     QDialog d(this);
-    d.setWindowTitle(QStringLiteral("Save Picture"));
+    d.setWindowTitle(T("Save Picture"));
     auto* form = new QFormLayout(&d);
     auto* sizes = new QComboBox;
     const QSize win = m_view->size() * m_view->devicePixelRatioF();
     const QList<QPair<QString, QSize>> presets = {
-        {QStringLiteral("Window Size (%1 × %2)").arg(win.width()).arg(win.height()), win},
+        {T("Window Size (%1 × %2)").arg(win.width()).arg(win.height()), win},
         {QStringLiteral("Full HD (1920 × 1080)"), QSize(1920, 1080)},
         {QStringLiteral("QHD (2560 × 1440)"), QSize(2560, 1440)},
         {QStringLiteral("4K (3840 × 2160)"), QSize(3840, 2160)},
         {QStringLiteral("8K (7680 × 4320)"), QSize(7680, 4320)},
-        {QStringLiteral("Square (2000 × 2000)"), QSize(2000, 2000)},
-        {QStringLiteral("Custom"), QSize()},
+        {T("Square (2000 × 2000)"), QSize(2000, 2000)},
+        {T("Custom", "size"), QSize()},
     };
     for (const auto& p : presets) sizes->addItem(p.first);
     sizes->setCurrentIndex(3);
@@ -1964,18 +1986,18 @@ void MainWindow::savePicture()
     sizeRow->addWidget(new QLabel(QStringLiteral("×")));
     sizeRow->addWidget(hBox);
     auto* aa = new QComboBox;
-    aa->addItems({QStringLiteral("Off"), QStringLiteral("2 × 2"), QStringLiteral("3 × 3"), QStringLiteral("4 × 4")});
+    aa->addItems({T("Off"), QStringLiteral("2 × 2"), QStringLiteral("3 × 3"), QStringLiteral("4 × 4")});
     aa->setCurrentIndex(2);
-    aa->setToolTip(QStringLiteral("Samples per pixel: smoother edges, and 4, 9 or 16 times the work."));
-    form->addRow(QStringLiteral("Size"), sizes);
-    form->addRow(QStringLiteral("Width and Height"), sizeRow);
-    form->addRow(QStringLiteral("Anti-Aliasing"), aa);
-    auto* note = new QLabel(QStringLiteral("Large pictures are drawn in pieces, so any size fits in memory."));
+    aa->setToolTip(T("Samples per pixel: smoother edges, and 4, 9 or 16 times the work."));
+    form->addRow(T("Size"), sizes);
+    form->addRow(T("Width and Height"), sizeRow);
+    form->addRow(T("Anti-Aliasing"), aa);
+    auto* note = new QLabel(T("Large pictures are drawn in pieces, so any size fits in memory."));
     note->setObjectName(QStringLiteral("muted"));
     note->setWordWrap(true);
     form->addRow(note);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("Save…"));
+    buttons->button(QDialogButtonBox::Ok)->setText(T("Save…"));
     form->addRow(buttons);
     auto applyPreset = [&](int i) {
         const bool custom = presets[i].second.isEmpty();
@@ -1994,12 +2016,12 @@ void MainWindow::savePicture()
     const int w = wBox->value(), h = hBox->value(), ss = aa->currentIndex() + 1;
 
     const QString name = QStringLiteral("mandelbrot-%1.png").arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
-    const QString f = QFileDialog::getSaveFileName(this, QStringLiteral("Save Picture"), QDir(m_s.lastFolder).filePath(name),
-                                                   QStringLiteral("PNG Pictures (*.png);;JPEG Pictures (*.jpg)"), nullptr,
+    const QString f = QFileDialog::getSaveFileName(this, T("Save Picture"), QDir(m_s.lastFolder).filePath(name),
+                                                   T("PNG Pictures (*.png);;JPEG Pictures (*.jpg)"), nullptr,
                                                    filedialogs::options());
     if (f.isEmpty()) return;
-    QProgressDialog progress(QStringLiteral("Rendering %1 × %2…").arg(w).arg(h), QStringLiteral("Cancel"), 0, 1000, this);
-    progress.setWindowTitle(QStringLiteral("Save Picture"));
+    QProgressDialog progress(T("Rendering %1 × %2…").arg(w).arg(h), T("Cancel"), 0, 1000, this);
+    progress.setWindowTitle(T("Save Picture"));
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(300);
     QString err;
@@ -2009,8 +2031,8 @@ void MainWindow::savePicture()
         return !progress.wasCanceled();
     });
     progress.close();
-    if (!ok && err != QStringLiteral("Cancelled."))
-        QMessageBox::warning(this, QStringLiteral("Couldn't Save Picture"), err);
+    if (!ok && err != T("Cancelled."))
+        QMessageBox::warning(this, T("Couldn't Save Picture"), err);
 }
 
 bool MainWindow::savePictureTo(const QString& f, int w, int h, int ss, QString* error, const std::function<bool(double)>& progress)
@@ -2020,18 +2042,18 @@ bool MainWindow::savePictureTo(const QString& f, int w, int h, int ss, QString* 
     QString err;
     const QImage img = m_view->renderPicture(m_view->view(), w, h, ss, &err, progress);
     if (img.isNull()) {
-        log(QStringLiteral("The picture wasn't saved: %1").arg(err));
+        log(T("The picture wasn't saved: %1").arg(err));
         if (error) *error = err;
         return false;
     }
     if (!img.save(f)) {
-        err = QStringLiteral("Couldn't write %1.").arg(QDir::toNativeSeparators(f));
+        err = T("Couldn't write %1.").arg(QDir::toNativeSeparators(f));
         log(err);
         if (error) *error = err;
         return false;
     }
     m_s.lastFolder = QFileInfo(f).absolutePath();
-    log(QStringLiteral("Saved %1 (%2 × %3, %4 s).").arg(QDir::toNativeSeparators(f)).arg(w).arg(h)
+    log(T("Saved %1 (%2 × %3, %4 s).").arg(QDir::toNativeSeparators(f)).arg(w).arg(h)
             .arg(QLocale().toString(t.elapsed() / 1000.0, 'f', 1)));
     return true;
 }
@@ -2051,11 +2073,11 @@ void MainWindow::setAutopilot(bool on)
         m_view->setView(here);
         rememberView();
         saveSettingsSoon();
-        log(QStringLiteral("The autopilot flies through the Mandelbrot set, so the picture switched from the Buddhabrot to "
-                           "the Mandelbrot set at this spot. Undo (Ctrl+Z) brings the Buddhabrot back."));
+        log(T("The autopilot flies through the Mandelbrot set, so the picture switched from the Buddhabrot to "
+              "the Mandelbrot set at this spot. Undo (Ctrl+Z) brings the Buddhabrot back."));
     }
     m_view->setAutopilot(on);
-    if (on && !m_view->autopilot() && !m_view->gpuReady()) log(QStringLiteral("The autopilot needs the graphics card renderer."));
+    if (on && !m_view->autopilot() && !m_view->gpuReady()) log(T("The autopilot needs the graphics card renderer."));
 }
 
 void MainWindow::recordZoom()
@@ -2063,9 +2085,9 @@ void MainWindow::recordZoom()
     setAutopilot(false);
     const bool canLoop = !m_fractal.julia() && m_fractal.deepCapable();
     const QString why = m_fractal.julia()
-        ? QStringLiteral("Loops need the Mandelbrot set: Julia sets have no mini copies of themselves.")
-        : !m_fractal.classic() ? QStringLiteral("Loops need the classic formula: the search for a mini copy is written for it.")
-                               : QStringLiteral("Loops need power 2: the deep zoom into a mini copy only works there.");
+        ? T("Loops need the Mandelbrot set: Julia sets have no mini copies of themselves.")
+        : !m_fractal.classic() ? T("Loops need the classic formula: the search for a mini copy is written for it.")
+                               : T("Loops need power 2: the deep zoom into a mini copy only works there.");
     RecordDialog d(m_view->view(), canLoop, why, m_view->size() * m_view->devicePixelRatioF(), this);
     if (d.exec() != QDialog::Accepted) return;
     RecordSettings s = d.settings();
@@ -2073,25 +2095,25 @@ void MainWindow::recordZoom()
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
     QString path;
     if (s.format == MovieWriter::Format::PngFrames) {
-        const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose a Folder for the Frames"), m_s.lastFolder,
+        const QString dir = QFileDialog::getExistingDirectory(this, T("Choose a Folder for the Frames"), m_s.lastFolder,
                                                               filedialogs::options());
         if (dir.isEmpty()) return;
         path = QDir(dir).filePath(QStringLiteral("zoom-%1").arg(stamp));
         m_s.lastFolder = dir;
     } else {
         const QString ext = MovieWriter::extension(s.format);
-        const QString filter = s.format == MovieWriter::Format::Mp4   ? QStringLiteral("MP4 Videos (*.mp4)")
-                               : s.format == MovieWriter::Format::Gif ? QStringLiteral("Animated GIF (*.gif)")
-                                                                      : QStringLiteral("Animated WebP (*.webp)");
-        path = QFileDialog::getSaveFileName(this, QStringLiteral("Save Zoom Movie"),
+        const QString filter = s.format == MovieWriter::Format::Mp4   ? T("MP4 Videos (*.mp4)")
+                               : s.format == MovieWriter::Format::Gif ? T("Animated GIF (*.gif)")
+                                                                      : T("Animated WebP (*.webp)");
+        path = QFileDialog::getSaveFileName(this, T("Save Zoom Movie"),
                                             QDir(m_s.lastFolder).filePath(QStringLiteral("zoom-%1%2").arg(stamp, ext)), filter,
                                             nullptr, filedialogs::options());
         if (path.isEmpty()) return;
         if (!path.endsWith(ext, Qt::CaseInsensitive)) path += ext;
         m_s.lastFolder = QFileInfo(path).absolutePath();
     }
-    QProgressDialog progress(QStringLiteral("Rendering the zoom…"), QStringLiteral("Cancel"), 0, 1000, this);
-    progress.setWindowTitle(QStringLiteral("Record Zoom"));
+    QProgressDialog progress(T("Rendering the zoom…"), T("Cancel"), 0, 1000, this);
+    progress.setWindowTitle(T("Record Zoom"));
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(0);
     QElapsedTimer t;
@@ -2101,7 +2123,7 @@ void MainWindow::recordZoom()
         progress.setValue(int(1000.0 * done / std::max(total, 1)));
         if (done > 0) {
             const double left = t.elapsed() / 1000.0 * (total - done) / done;
-            progress.setLabelText(QStringLiteral("Frame %1 of %2 · about %3 left")
+            progress.setLabelText(T("Frame %1 of %2 · about %3 left")
                                       .arg(QLocale().toString(done)).arg(QLocale().toString(total))
                                       .arg(left < 90 ? QStringLiteral("%1 s").arg(int(std::ceil(left)))
                                                      : QStringLiteral("%1 min").arg(int(std::ceil(left / 60)))));
@@ -2110,8 +2132,8 @@ void MainWindow::recordZoom()
         return !progress.wasCanceled();
     });
     progress.close();
-    if (!ok && err != QStringLiteral("Cancelled."))
-        QMessageBox::warning(this, QStringLiteral("Couldn't Record the Zoom"), err);
+    if (!ok && err != T("Cancelled."))
+        QMessageBox::warning(this, T("Couldn't Record the Zoom"), err);
 }
 
 bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QString* error,
@@ -2119,13 +2141,13 @@ bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QStr
 {
     QString err;
     if (s.loop && !s.minibrot.found) {
-        err = QStringLiteral("No mini Mandelbrot was found for the loop.");
+        err = T("No mini Mandelbrot was found for the loop.");
         if (error) *error = err;
         return false;
     }
     std::unique_ptr<MovieWriter> writer = MovieWriter::create(s.format, path, s.size.width(), s.size.height(), s.fps, &err);
     if (!writer) {
-        log(QStringLiteral("The movie couldn't start: %1").arg(err));
+        log(T("The movie couldn't start: %1").arg(err));
         if (error) *error = err;
         return false;
     }
@@ -2142,7 +2164,7 @@ bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QStr
     const core::View deepest = viewAt(n - 1 + k);
     if (!m_view->beginMovie(deepest, s.size.width(), s.size.height())) {
         m_view->endMovie();
-        err = m_view->gpuReady() ? QStringLiteral("The reference orbit couldn't be computed.") : m_view->gpuError();
+        err = m_view->gpuReady() ? T("The reference orbit couldn't be computed.") : m_view->gpuError();
         if (error) *error = err;
         return false;
     }
@@ -2188,7 +2210,7 @@ bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QStr
                            : m_view->renderPicture(viewAt(i), s.size.width(), s.size.height(), s.samplesPerSide, &e,
                                                    goOn, double(i) / s.fps);
         if (out->isNull()) {
-            if (e == QStringLiteral("Cancelled.")) cancelled = true;
+            if (e == T("Cancelled.")) cancelled = true;
             err = e;
             return false;
         }
@@ -2226,21 +2248,22 @@ bool MainWindow::recordZoomTo(const RecordSettings& s, const QString& path, QStr
     if (ok) ok = writer->finish(&err);
     writer.reset();
     if (!ok) {
-        if (cancelled) err = QStringLiteral("Cancelled.");
-        log(cancelled ? QStringLiteral("The zoom movie was cancelled.") : QStringLiteral("The zoom movie failed: %1").arg(err));
+        if (cancelled) err = T("Cancelled.");
+        log(cancelled ? T("The zoom movie was cancelled.") : T("The zoom movie failed: %1").arg(err));
         // A half-written file is no use: remove it (a frames folder keeps the frames already written).
         if (s.format != MovieWriter::Format::PngFrames) QFile::remove(path);
         if (error) *error = err;
         return false;
     }
-    log(QStringLiteral("Saved a %1-frame %2 to %3 (%4 × %5, %6 s to render%7).")
+    // Whole sentences, so the word order can follow the language
+    log((s.loop ? T("Saved a %1-frame seamless loop to %2 (%3 × %4, %5 s to render%6).")
+                : T("Saved a %1-frame zoom to %2 (%3 × %4, %5 s to render%6)."))
             .arg(QLocale().toString(n))
-            .arg(s.loop ? QStringLiteral("seamless loop") : QStringLiteral("zoom"))
             .arg(QDir::toNativeSeparators(path))
             .arg(s.size.width()).arg(s.size.height())
             .arg(QLocale().toString(timer.elapsed() / 1000.0, 'f', 1))
             .arg(s.keyframes && m_view->movieKeyframes() > 0
-                     ? QStringLiteral(", %1 keyframes").arg(m_view->movieKeyframes()) : QString()));
+                     ? T(", %1 keyframes").arg(m_view->movieKeyframes()) : QString()));
     return true;
 }
 
@@ -2250,7 +2273,12 @@ void MainWindow::randomizeColors()
     const core::ColorParams c = core::randomColorsFor(*QRandomGenerator::global(), m_colors, m_fractal, m_view->view());
     setColors(c);
     finishEdit();
-    log(QStringLiteral("New random colors: %1, %2 palette.").arg(core::styleNames().value(c.style), c.palette));
+    log(T("New random colors: %1, %2 palette.").arg(core::styleNames().value(c.style), paletteShownName(c.palette)));
+}
+
+QString MainWindow::paletteShownName(const QString& name)
+{
+    return core::isBuiltInPalette(name) ? Tname(name) : name;   // the user's own keep the name they gave
 }
 
 void MainWindow::refreshPaletteList()
@@ -2258,20 +2286,21 @@ void MainWindow::refreshPaletteList()
     const bool was = m_syncing;
     m_syncing = true;
     m_palette->clear();
-    for (const core::Palette& p : core::builtInPalettes()) m_palette->addItem(paletteIcon(p.name), p.name);
+    // Each entry shows the name in the app's language and keeps the English name (the one in files) as its data
+    for (const core::Palette& p : core::builtInPalettes()) m_palette->addItem(paletteIcon(p.name), Tname(p.name), p.name);
     if (!core::customPalettes().isEmpty()) {
         m_palette->insertSeparator(m_palette->count());
-        for (const core::Palette& p : core::customPalettes()) m_palette->addItem(paletteIcon(p.name), p.name);
+        for (const core::Palette& p : core::customPalettes()) m_palette->addItem(paletteIcon(p.name), p.name, p.name);
     }
-    m_palette->setCurrentIndex(std::max(0, m_palette->findText(m_colors.palette)));
+    m_palette->setCurrentIndex(std::max(0, m_palette->findData(m_colors.palette)));
     m_syncing = was;
 }
 
 QStringList MainWindow::paletteChoices() const
 {
-    QStringList out;
+    QStringList out;   // the names as kept in files (English for the built-in ones)
     for (int i = 0; i < m_palette->count(); ++i)
-        if (!m_palette->itemText(i).isEmpty()) out << m_palette->itemText(i);
+        if (!m_palette->itemData(i).toString().isEmpty()) out << m_palette->itemData(i).toString();
     return out;
 }
 
@@ -2312,7 +2341,7 @@ void MainWindow::finishPaletteEdit(bool save, const core::Palette& p)
         colorsEdited();
         finishEdit();
         saveSettingsSoon();
-        log(QStringLiteral("Saved the palette \"%1\" (%2 colors). It is listed after the built-in palettes.")
+        log(T("Saved the palette \"%1\" (%2 colors). It is listed after the built-in palettes.")
                 .arg(p.name).arg(p.stops.size()));
         return;
     }
@@ -2332,7 +2361,7 @@ void MainWindow::deleteCustomPalette(const QString& name)
     refreshPaletteList();
     syncControls();
     saveSettingsSoon();
-    log(QStringLiteral("Deleted the palette \"%1\".").arg(name));
+    log(T("Deleted the palette \"%1\".").arg(name));
 }
 
 void MainWindow::editPalette()
@@ -2356,11 +2385,17 @@ void MainWindow::randomizeEverything()
     l.hasColors = true;
     if (s.fractal.julia() && !m_fractal.julia()) m_lastMandelbrotView = m_view->view();
     applyLocation(l);
-    log(QStringLiteral("Random: %1 at zoom %2×, %3 with the %4 palette. Undo and Back return to the ones before.")
-            .arg(s.fractal.name(), s.view.magnificationText(), core::styleNames().value(s.colors.style), s.colors.palette));
+    log(T("Random: %1 at zoom %2×, %3 with the %4 palette. Undo and Back return to the ones before.")
+            .arg(s.fractal.name(), s.view.magnificationText(), core::styleNames().value(s.colors.style),
+                 paletteShownName(s.colors.palette)));
 }
 
 // ------------------------------------------------------------------------------------------------ places
+
+namespace {
+// A place's or picture's name as shown: the built-in ones in the app's language, the user's own as they named them
+QString shownName(const core::Location& l) { return l.builtIn ? Tname(l.name) : l.name; }
+}  // namespace
 
 QStringList MainWindow::placeNames() const
 {
@@ -2384,19 +2419,18 @@ void MainWindow::loadPlaces()
         else if (l.hasColors) withColors << l;   // saved by an older version, colors and all: a whole picture
         else m_placeList << l;
     }
-    if (bad) log(QStringLiteral("%1 saved %2 couldn't be read and %3 skipped.").arg(bad)
-                     .arg(bad == 1 ? QStringLiteral("place") : QStringLiteral("places"))
-                     .arg(bad == 1 ? QStringLiteral("was") : QStringLiteral("were")));
+    if (bad) log(bad == 1 ? T("1 saved place couldn't be read and was skipped.")
+                          : T("%1 saved places couldn't be read and were skipped.").arg(bad));
     if (!withColors.isEmpty()) {
         // Places are spots only now; the ones saved with their colors become the user's Gallery pictures.
         const int mine = myGalleryCount();
         for (int i = 0; i < withColors.size(); ++i) m_gallery.insert(mine + i, withColors[i]);
         saveGallery();
         savePlaces();
-        log(QStringLiteral("%1 saved %2 with %3 own colors moved to the Gallery, where pictures keep their colors.")
-                .arg(withColors.size())
-                .arg(withColors.size() == 1 ? QStringLiteral("place") : QStringLiteral("places"))
-                .arg(withColors.size() == 1 ? QStringLiteral("its") : QStringLiteral("their")));
+        log(withColors.size() == 1
+                ? T("1 saved place with its own colors moved to the Gallery, where pictures keep their colors.")
+                : T("%1 saved places with their own colors moved to the Gallery, where pictures keep their colors.")
+                      .arg(withColors.size()));
     }
 }
 
@@ -2420,15 +2454,15 @@ void MainWindow::refreshPlaces()
     const int keep = m_places->currentRow();
     m_places->clear();
     for (const core::Location& l : m_placeList) {
-        auto* it = new QListWidgetItem(l.name);
+        auto* it = new QListWidgetItem(shownName(l));
         if (!l.thumbnail.isNull()) it->setIcon(QIcon(QPixmap::fromImage(l.thumbnail)));
         else {
             QPixmap blank(80, 50);
             blank.fill(QColor(0x20, 0x22, 0x28));
             it->setIcon(QIcon(blank));
         }
-        it->setToolTip(QStringLiteral("%1\nZoom %2×%3").arg(l.name, l.view.magnificationText(),
-                                                            l.builtIn ? QStringLiteral("\nBuilt in") : QString()));
+        it->setToolTip(QStringLiteral("%1\n%2%3").arg(shownName(l), T("Zoom %1×").arg(l.view.magnificationText()),
+                                                      l.builtIn ? QStringLiteral("\n") + T("Built in") : QString()));
         m_places->addItem(it);
     }
     if (keep >= 0 && keep < m_places->count()) m_places->setCurrentRow(keep);
@@ -2443,17 +2477,17 @@ void MainWindow::updatePlaceButtons()
     m_goPlace->setEnabled(any);
     m_renamePlace->setEnabled(mine);
     m_removePlace->setEnabled(mine);
-    const QString why = any && !mine ? QStringLiteral("Built-in places can't be changed.") : QStringLiteral("Choose a place first.");
-    m_renamePlace->setToolTip(mine ? QStringLiteral("Gives the place a new name.") : why);
-    m_removePlace->setToolTip(mine ? QStringLiteral("Removes the place from the list.") : why);
-    m_goPlace->setToolTip(any ? QStringLiteral("Goes to the place (or double-click it).") : QStringLiteral("Choose a place first."));
+    const QString why = any && !mine ? T("Built-in places can't be changed.") : T("Choose a place first.");
+    m_renamePlace->setToolTip(mine ? T("Gives the place a new name.") : why);
+    m_removePlace->setToolTip(mine ? T("Removes the place from the list.") : why);
+    m_goPlace->setToolTip(any ? T("Goes to the place (or double-click it).") : T("Choose a place first."));
 }
 
 void MainWindow::addPlace()
 {
-    QString name = QStringLiteral("Place %1").arg(m_placeList.size() - core::builtInPlaces().size() + 1);
+    QString name = T("Place %1").arg(m_placeList.size() - core::builtInPlaces().size() + 1);
     bool ok = false;
-    name = QInputDialog::getText(this, QStringLiteral("Add to Places"), QStringLiteral("Name"), QLineEdit::Normal, name, &ok).trimmed();
+    name = QInputDialog::getText(this, T("Add to Places"), T("Name"), QLineEdit::Normal, name, &ok).trimmed();
     if (ok && !name.isEmpty()) addPlaceNamed(name);
 }
 
@@ -2479,7 +2513,7 @@ void MainWindow::addPlaceNamed(const QString& name)
     m_places->scrollToBottom();
     setCardOpen(QStringLiteral("PLACES"), true);
     savePlaces();
-    log(QStringLiteral("Added \"%1\" to Places.").arg(l.name));
+    log(T("Added \"%1\" to Places.").arg(l.name));
 }
 
 void MainWindow::renamePlace()
@@ -2487,7 +2521,7 @@ void MainWindow::renamePlace()
     const int row = m_places->currentRow();
     if (row < 0 || row >= m_placeList.size() || m_placeList[row].builtIn) return;
     bool ok = false;
-    const QString name = QInputDialog::getText(this, QStringLiteral("Rename Place"), QStringLiteral("Name"), QLineEdit::Normal,
+    const QString name = QInputDialog::getText(this, T("Rename Place"), T("Name"), QLineEdit::Normal,
                                                m_placeList[row].name, &ok).trimmed();
     if (ok) renamePlaceTo(row, name);
 }
@@ -2518,7 +2552,7 @@ void MainWindow::removePlace()
     m_placeList.removeAt(row);
     refreshPlaces();
     savePlaces();
-    log(QStringLiteral("Removed \"%1\" from Places.").arg(name));
+    log(T("Removed \"%1\" from Places.").arg(name));
 }
 
 void MainWindow::goToPlace(int row)
@@ -2528,7 +2562,7 @@ void MainWindow::goToPlace(int row)
     l.hasColors = false;   // places are spots: the colors in use stay
     if (l.fractal.julia() && !m_fractal.julia()) m_lastMandelbrotView = m_view->view();
     applyLocation(l);
-    log(QStringLiteral("Went to \"%1\" (zoom %2×).").arg(l.name, l.view.magnificationText()));
+    log(T("Went to \"%1\" (zoom %2×).").arg(shownName(l), l.view.magnificationText()));
 }
 
 void MainWindow::showGalleryItem(int i)
@@ -2539,7 +2573,7 @@ void MainWindow::showGalleryItem(int i)
     if (m_fractal.type == core::FractalType::Mandelbrot && l.fractal.type != core::FractalType::Mandelbrot)
         m_lastMandelbrotView = m_view->view();
     applyLocation(l);
-    log(QStringLiteral("Gallery: %1. Undo (Ctrl+Z) brings your colors back.").arg(l.name));
+    log(T("Gallery: %1. Undo (Ctrl+Z) brings your colors back.").arg(shownName(l)));
 }
 
 namespace {
@@ -2570,9 +2604,8 @@ void MainWindow::loadGallery()
                 ++bad;
             }
         }
-        if (bad) log(QStringLiteral("%1 Gallery %2 couldn't be read and %3 skipped.").arg(bad)
-                         .arg(bad == 1 ? QStringLiteral("picture") : QStringLiteral("pictures"))
-                         .arg(bad == 1 ? QStringLiteral("was") : QStringLiteral("were")));
+        if (bad) log(bad == 1 ? T("1 Gallery picture couldn't be read and was skipped.")
+                              : T("%1 Gallery pictures couldn't be read and were skipped.").arg(bad));
     }
     m_gallery = mine + core::galleryPlaces();
 }
@@ -2586,7 +2619,7 @@ void MainWindow::saveGallery()
     QSaveFile f(galleryFile());   // never a half-written file
     if (f.open(QIODevice::WriteOnly)) {
         f.write(QJsonDocument(QJsonObject{{QStringLiteral("pictures"), a}}).toJson(QJsonDocument::Indented));
-        if (!f.commit()) log(QStringLiteral("Couldn't save the Gallery to %1.").arg(QDir::toNativeSeparators(galleryFile())));
+        if (!f.commit()) log(T("Couldn't save the Gallery to %1.").arg(QDir::toNativeSeparators(galleryFile())));
     }
 }
 
@@ -2595,7 +2628,7 @@ void MainWindow::refreshGallery()
     const int keep = m_galleryList->currentRow();
     m_galleryList->clear();
     for (const core::Location& l : m_gallery) {
-        auto* it = new QListWidgetItem(l.name);
+        auto* it = new QListWidgetItem(shownName(l));
         QPixmap pm;
         if (!l.thumbnail.isNull()) {
             pm = QPixmap::fromImage(l.thumbnail);
@@ -2605,9 +2638,8 @@ void MainWindow::refreshGallery()
         }
         it->setIcon(QIcon(pm));
         it->setTextAlignment(Qt::AlignHCenter | Qt::AlignTop);
-        it->setToolTip(l.builtIn ? QStringLiteral("%1\nA famous fractal in its own colors. Click to see it.").arg(l.name)
-                                 : QStringLiteral("%1\nSaved by you. Click to see it; right-click to rename or remove it.")
-                                       .arg(l.name));
+        it->setToolTip(l.builtIn ? T("%1\nA famous fractal in its own colors. Click to see it.").arg(shownName(l))
+                                 : T("%1\nSaved by you. Click to see it; right-click to rename or remove it.").arg(l.name));
         m_galleryList->addItem(it);
     }
     if (keep >= 0 && keep < m_galleryList->count()) m_galleryList->setCurrentRow(keep);
@@ -2621,15 +2653,15 @@ void MainWindow::rebuildGalleryMenu()
     const int mine = myGalleryCount();
     for (int i = 0; i < m_gallery.size(); ++i) {
         if (i == mine && mine > 0) m_galleryMenu->addSeparator();   // the user's pictures, then the famous ones
-        m_galleryMenu->addAction(m_gallery[i].name, this, [this, i] { showGalleryItem(i); });
+        m_galleryMenu->addAction(shownName(m_gallery[i]), this, [this, i] { showGalleryItem(i); });
     }
 }
 
 void MainWindow::saveToGallery()
 {
-    QString name = QStringLiteral("Picture %1").arg(myGalleryCount() + 1);
+    QString name = T("Picture %1").arg(myGalleryCount() + 1);
     bool ok = false;
-    name = QInputDialog::getText(this, QStringLiteral("Save to Gallery"), QStringLiteral("Name"), QLineEdit::Normal, name, &ok)
+    name = QInputDialog::getText(this, T("Save to Gallery"), T("Name"), QLineEdit::Normal, name, &ok)
                .trimmed();
     if (ok && !name.isEmpty()) saveToGalleryNamed(name);
 }
@@ -2661,7 +2693,7 @@ void MainWindow::saveToGalleryNamed(const QString& name)
     m_galleryList->scrollToTop();
     setCardOpen(QStringLiteral("GALLERY"), true);
     saveGallery();
-    log(QStringLiteral("Saved \"%1\" to the Gallery. Click it there to come back to it, colors and all.").arg(l.name));
+    log(T("Saved \"%1\" to the Gallery. Click it there to come back to it, colors and all.").arg(l.name));
 }
 
 void MainWindow::renameGalleryItem(int i, const QString& name)
@@ -2679,7 +2711,55 @@ void MainWindow::removeGalleryItem(int i)
     m_gallery.removeAt(i);
     refreshGallery();
     saveGallery();
-    log(QStringLiteral("Removed \"%1\" from the Gallery.").arg(name));
+    log(T("Removed \"%1\" from the Gallery.").arg(name));
+}
+
+void MainWindow::chooseLanguage(const QString& code)
+{
+    if (!language::isKnown(code) || code == m_s.language) return;
+    m_s.language = code;
+    if (m_interactive) m_s.save(appdata::settingsFile());   // kept at once, whatever happens next
+    if (code == language::current()) {   // back to the language showing now: nothing to restart
+        log(T("Language: %1.").arg(language::nameOf(code)));
+        return;
+    }
+    bool now = false;
+    if (restartAnswer) {   // tests: the answer without a window
+        now = restartAnswer();
+    } else if (m_interactive) {
+        QMessageBox box(QMessageBox::Question, T("Language"),
+                        T("%1 shows in %2 once it starts again. Restart it now?").arg(QStringLiteral(APP_TITLE), language::nameOf(code)),
+                        QMessageBox::Yes | QMessageBox::No, this);
+        box.button(QMessageBox::Yes)->setText(T("Restart Now"));
+        box.button(QMessageBox::No)->setText(T("Later"));
+        box.setDefaultButton(QMessageBox::Yes);
+        now = box.exec() == QMessageBox::Yes;
+    }
+    if (!now) {
+        log(T("Language: %1 from the next start.").arg(language::nameOf(code)));
+        return;
+    }
+    QStringList args;
+    if (appdata::usesOverride())
+        args << QStringLiteral("--data-folder") << (appdata::isTemporary() ? QStringLiteral("<none>") : appdata::folder());
+    // An AppImage runs from a folder that's gone once it closes: start the AppImage file itself again.
+    const QString appImage = qEnvironmentVariable("APPIMAGE");
+    const QString program = appImage.isEmpty() ? QCoreApplication::applicationFilePath() : appImage;
+    if (startAgain) {   // tests: nothing is started
+        if (!startAgain(program, args)) {
+            log(T("%1 couldn't start again by itself: open it again to see it in %2.").arg(QStringLiteral(APP_TITLE), language::nameOf(code)));
+            return;
+        }
+    } else {
+        restartAfterQuit() = {program, args};   // main() starts it once this window has closed
+    }
+    close();   // the view, the colors and the places are kept on closing, so the new copy opens where this one was
+}
+
+MainWindow::Restart& MainWindow::restartAfterQuit()
+{
+    static Restart r;
+    return r;
 }
 
 void MainWindow::renderBuiltInThumbnails()

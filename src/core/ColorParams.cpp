@@ -1,6 +1,7 @@
 #include "ColorParams.h"
 
 #include "Palette.h"
+#include "Tr.h"
 
 #include <QJsonValue>
 
@@ -95,25 +96,26 @@ const SliderSpec* sliderSpec(const QString& key)
     return nullptr;
 }
 
+// The names below are only shown (files keep the index), so they come in the app's language.
 QStringList styleNames()
 {
-    return {QStringLiteral("Smooth Gradient"), QStringLiteral("Sine Waves"), QStringLiteral("Moiré Fabric"),
-            QStringLiteral("Distance Bands"), QStringLiteral("Stripes"), QStringLiteral("Angle"), QStringLiteral("Orbit Trap")};
+    return {T("Smooth Gradient"), T("Sine Waves"), T("Moiré Fabric"), T("Distance Bands"), T("Stripes"), T("Angle"),
+            T("Orbit Trap")};
 }
 
 QStringList trapShapeNames()
 {
-    return {QStringLiteral("Point"), QStringLiteral("Cross"), QStringLiteral("Circle")};
+    return {T("Point"), T("Cross"), T("Circle")};
 }
 
 QStringList interiorStyleNames()
 {
-    return {QStringLiteral("Solid"), QStringLiteral("Diagonal Gradient"), QStringLiteral("Depth")};
+    return {T("Solid"), T("Diagonal Gradient"), T("Depth")};
 }
 
 QStringList colorScaleNames()
 {
-    return {QStringLiteral("Linear"), QStringLiteral("Square Root"), QStringLiteral("Logarithmic")};
+    return {T("Linear"), T("Square Root"), T("Logarithmic")};
 }
 
 static QString colorText(const QColor& c) { return c.name(QColor::HexRgb).toUpper(); }

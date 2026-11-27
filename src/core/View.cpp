@@ -1,4 +1,5 @@
 #include "View.h"
+#include "Tr.h"
 
 #include <QJsonValue>
 #include <QRegularExpression>
@@ -153,7 +154,7 @@ bool View::fromJson(const QJsonObject& o, QString* error)
     FloatExp sc;
     if (!parseFloatExp(o.value(QStringLiteral("scale")).toString(), &sc) || !(sc > FloatExp(0.0))
         || sc > FloatExp(64.0) || sc.e < -2'000'000) {
-        if (error) *error = QStringLiteral("The zoom (\"scale\") is missing or out of range.");
+        if (error) *error = T("The zoom (\"scale\") is missing or out of range.");
         return false;
     }
     const std::string re = o.value(QStringLiteral("re")).toString().toStdString();
@@ -165,11 +166,11 @@ bool View::fromJson(const QJsonObject& o, QString* error)
     const long bits = std::max(v.neededPrecision(), digitsBits);
     BigFloat x(bits), y(bits);
     if (!x.parse(re) || !y.parse(im)) {
-        if (error) *error = QStringLiteral("The center (\"re\" and \"im\") must be plain numbers.");
+        if (error) *error = T("The center (\"re\" and \"im\") must be plain numbers.");
         return false;
     }
     if (std::fabs(x.toDouble()) > 64 || std::fabs(y.toDouble()) > 64) {
-        if (error) *error = QStringLiteral("The center is too far outside the set.");
+        if (error) *error = T("The center is too far outside the set.");
         return false;
     }
     v.cx = x;

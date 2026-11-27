@@ -3,6 +3,7 @@
 #include "core/Bloom.h"
 #include "core/Palette.h"
 #include "core/Sphere.h"
+#include "core/Tr.h"
 
 #include <QElapsedTimer>
 #include <QPainter>
@@ -409,7 +410,7 @@ bool RenderCore::buddhaStep(double budgetMs)
 QImage RenderCore::renderBuddha(const core::View& v, int w, int h, QString* error, const std::function<bool(double)>& progress)
 {
     if (w > 8192 || h > 8192) {
-        if (error) *error = QStringLiteral("Buddhabrot pictures can be at most 8192 pixels on a side.");
+        if (error) *error = T("Buddhabrot pictures can be at most 8192 pixels on a side.");
         return {};
     }
     m_gpu.setPalette(core::paletteByName(m_colors.palette).sample(1024));
@@ -423,7 +424,7 @@ QImage RenderCore::renderBuddha(const core::View& v, int w, int h, QString* erro
     while (done < target) {
         done += m_gpu.buddhaAccumulate(p, 120.0);
         if (progress && !progress(std::min(1.0, double(done) / double(target)))) {
-            if (error) *error = QStringLiteral("Cancelled.");
+            if (error) *error = T("Cancelled.");
             m_colorsDirty = true;
             return {};
         }
@@ -571,7 +572,7 @@ bool RenderCore::renderRaw(const core::View& v, int w, int h, int ss, RawFrame* 
                            const std::function<bool(double)>& progress)
 {
     if (qint64(w) * h * ss * ss > kMaxRawPixels) {
-        if (error) *error = QStringLiteral("The frame is too large to keep whole.");
+        if (error) *error = T("The frame is too large to keep whole.");
         return false;
     }
     return !renderImpl(v, w, h, ss, error, progress, out).isNull();
@@ -581,18 +582,18 @@ QImage RenderCore::renderImpl(const core::View& v0, int w, int h, int ss, QStrin
                               const std::function<bool(double)>& progress, RawFrame* keep)
 {
     if (!m_gpu.ready()) {
-        if (error) *error = QStringLiteral("The graphics card renderer isn't available.");
+        if (error) *error = T("The graphics card renderer isn't available.");
         return {};
     }
     if (m_fractal.buddhabrot()) {
         if (keep) {
-            if (error) *error = QStringLiteral("Buddhabrot frames are counted, not kept.");
+            if (error) *error = T("Buddhabrot frames are counted, not kept.");
             return {};
         }
         return renderBuddha(v0, w, h, error, progress);
     }
     if (w < 1 || h < 1 || w > 32768 || h > 32768) {
-        if (error) *error = QStringLiteral("The picture size must be between 1 and 32768 pixels on each side.");
+        if (error) *error = T("The picture size must be between 1 and 32768 pixels on each side.");
         return {};
     }
     ss = std::clamp(ss, 1, 4);
@@ -620,7 +621,7 @@ QImage RenderCore::renderImpl(const core::View& v0, int w, int h, int ss, QStrin
         return true;
     };
     if (!ensureReference()) {
-        if (error) *error = QStringLiteral("The reference orbit couldn't be computed.");
+        if (error) *error = T("The reference orbit couldn't be computed.");
         return {};
     }
     RawFrame frame;
@@ -633,7 +634,7 @@ QImage RenderCore::renderImpl(const core::View& v0, int w, int h, int ss, QStrin
             while (!m_gpu.continuePass(frame, 150.0)) {
                 if (progress && !progress(0.0)) {
                     m_gpu.freeFrame(frame);
-                    if (error) *error = QStringLiteral("Cancelled.");
+                    if (error) *error = T("Cancelled.");
                     return {};
                 }
             }
@@ -643,7 +644,7 @@ QImage RenderCore::renderImpl(const core::View& v0, int w, int h, int ss, QStrin
             m_autoIter = maxIt;
             m_autoIterScaleLog2 = v.scale.log2Abs();
             if (!ensureReference()) {
-                if (error) *error = QStringLiteral("The reference orbit couldn't be computed.");
+                if (error) *error = T("The reference orbit couldn't be computed.");
                 return {};
             }
         }
@@ -716,7 +717,7 @@ QImage RenderCore::renderImpl(const core::View& v0, int w, int h, int ss, QStrin
     m_dirty = true;
     m_colorsDirty = true;
     if (cancelled) {
-        if (error) *error = QStringLiteral("Cancelled.");
+        if (error) *error = T("Cancelled.");
         return {};
     }
     if (keep) return out;
